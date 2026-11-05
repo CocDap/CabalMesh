@@ -11,39 +11,15 @@
 //! it can skip that step. See `docs/intent-chat-and-modules-design.md`.
 
 use crate::commands::{FormOptions, IntentFields};
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
-
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
-
-#[derive(Debug, Serialize)]
-struct OllamaRequest {
-    model: &'static str,
-    prompt: String,
-    stream: bool,
-    system: String,
-    format: &'static str,
-    options: OllamaOptions,
-}
-
-#[derive(Debug, Serialize)]
-struct OllamaOptions {
-    temperature: u8,
-    num_predict: u16,
-}
-
-#[derive(Debug, Deserialize)]
-struct OllamaResponse {
-    response: String,
-}
+use crate::llm_client::{LlmClient, LlmError};
+use serde::Deserialize;
 
 /// Failures that can occur before an LLM proposal reaches the ordinary intent
 /// validation boundary.
 #[derive(Debug, thiserror::Error)]
 pub enum IntentChatError {
     #[error("intent model request failed")]
-    Request(#[from] reqwest::Error),
+    Llm(#[from] LlmError),
     #[error("intent model returned invalid structured output")]
     InvalidResponse(#[from] serde_json::Error),
 }
@@ -122,81 +98,25 @@ Respond with ONLY this JSON object, nothing else, no explanation:
     )
 }
 
-/// Turns free text into intent fields via the configured Ollama endpoint.
-pub struct IntentChatParser {
-    client: Client,
-    ollama_url: Option<String>,
-}
-
-impl IntentChatParser {
-    #[must_use]
-    pub fn new(ollama_url: Option<String>) -> Self {
-        Self {
-            client: Client::new(),
-            ollama_url,
-        }
-    }
-
-    /// Resolved per request, matching `SharkAgent::url` — a URL set at
-    /// runtime (the only way to reach a model on iOS, which has no local
-    /// process) applies without a restart.
-    fn url(&self) -> String {
-        self.ollama_url
-            .clone()
-            .unwrap_or_else(crate::ollama_config::url)
-    }
-
-    /// Asks the model to turn `text` into intent fields, telling it exactly
-    /// which values `options` makes legal.
-    ///
-    /// # Errors
-    ///
-    /// The request to Ollama failed (network, timeout, non-2xx), or the model
-    /// did not return a JSON object. Invalid model output is reported instead
-    /// of being silently converted into seven empty form fields; an LLM
-    /// transport/format failure is not the same thing as missing user input.
-    pub async fn parse(
-        &self,
-        text: &str,
-        options: &FormOptions,
-    ) -> Result<IntentFields, IntentChatError> {
-        let request = OllamaRequest {
-            model: crate::ollama_config::INTENT_MODEL,
-            prompt: format!("Convert this request:\n\n{text}"),
-            stream: false,
-            system: system_prompt(options),
-            format: "json",
-            options: OllamaOptions {
-                temperature: 0,
-                num_predict: 256,
-            },
-        };
-
-        let response = self
-            .client
-            .post(format!("{}/api/generate", self.url()))
-            .timeout(REQUEST_TIMEOUT)
-            .json(&request)
-            .send()
-            .await?
-            .error_for_status()?;
-        let ollama_response: OllamaResponse = response.json().await?;
-
-        let parsed: ParsedFields = serde_json::from_str(crate::llm_json::extract_json_object(
-            &ollama_response.response,
-        ))?;
-
-        Ok(parsed.into())
-    }
+/// Asks the model to turn `text` into intent fields, telling it exactly which
+/// values `options` makes legal.
+///
+/// # Errors
+///
+/// The model call failed, or its answer does not have the fields' shape. Invalid
+/// model output is reported instead of being silently converted into seven empty
+/// form fields; a model failure is not the same thing as missing user input.
+pub async fn parse(client: &LlmClient, text: &str, options: &FormOptions) -> Result<IntentFields, IntentChatError> {
+    let answer = client.chat_json(&system_prompt(options), &format!("Convert this request:\n\n{text}")).await?;
+    let parsed: ParsedFields = serde_json::from_value(answer)?;
+    Ok(parsed.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::{AssetOption, ModeOption};
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
+    use crate::llm_client::mock;
 
     fn options() -> FormOptions {
         FormOptions {
@@ -281,62 +201,8 @@ mod tests {
         assert!(parsed.is_err());
     }
 
-    /// Starts one tiny HTTP/1.1 server and returns the complete request after
-    /// responding. Keeping this local makes the parser tests independent of a
-    /// developer's Ollama process and installed models.
-    fn mock_ollama(body: String) -> (String, thread::JoinHandle<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let handle = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 4096];
-            loop {
-                let read = stream.read(&mut buffer).unwrap();
-                if read == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buffer[..read]);
-                if request_is_complete(&request) {
-                    break;
-                }
-            }
-
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream.write_all(response.as_bytes()).unwrap();
-            String::from_utf8(request).unwrap()
-        });
-        (format!("http://{address}"), handle)
-    }
-
-    fn request_is_complete(request: &[u8]) -> bool {
-        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
-            return false;
-        };
-        let headers = String::from_utf8_lossy(&request[..header_end]);
-        let content_length = headers
-            .lines()
-            .find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("content-length")
-                    .then(|| value.trim().parse::<usize>().ok())
-                    .flatten()
-            })
-            .unwrap_or(0);
-        request.len() >= header_end + 4 + content_length
-    }
-
-    #[tokio::test]
-    async fn request_uses_llama31_and_ollama_json_mode() {
-        let model_output = serde_json::json!({
+    fn all_fields() -> String {
+        serde_json::json!({
             "action": "BUY",
             "asset": "wNEAR",
             "condition": "Price under",
@@ -345,46 +211,44 @@ mod tests {
             "mode": "SHARK MODE",
             "privacy": "HIGH"
         })
-        .to_string();
-        let response = serde_json::json!({ "response": model_output }).to_string();
-        let (url, request) = mock_ollama(response);
+        .to_string()
+    }
 
-        let fields = IntentChatParser::new(Some(url))
-            .parse("buy 10 wnear under 95", &options())
-            .await
-            .unwrap();
-        let request = request.join().unwrap();
+    #[tokio::test]
+    async fn request_uses_the_configured_model_in_json_mode() {
+        let (url, server) = mock::serve(vec![mock::reply(&all_fields())]);
+
+        let fields = parse(&mock::client(&url, None), "buy 10 wnear under 95", &options()).await.unwrap();
+        let request = server.join().unwrap().remove(0);
 
         assert_eq!(fields.action, "BUY");
         assert_eq!(fields.amount, "10");
-        assert!(request.contains(r#""model":"llama3.1:8b""#));
-        assert!(request.contains(r#""format":"json""#));
-        assert!(request.contains(r#""temperature":0"#));
+        assert!(request.starts_with("POST /v1/chat/completions "), "{request}");
+        assert!(request.contains(r#""model":"llama3.1:8b""#), "{request}");
+        assert!(request.contains(r#""response_format":{"type":"json_object"}"#), "{request}");
+        assert!(request.contains(r#""temperature":0"#), "{request}");
+        assert!(request.contains("buy 10 wnear under 95"), "{request}");
     }
 
     #[tokio::test]
     async fn malformed_model_output_is_rejected() {
-        let response = serde_json::json!({ "response": "not JSON" }).to_string();
-        let (url, request) = mock_ollama(response);
+        let (url, server) = mock::serve(vec![mock::reply("not JSON")]);
+        let result = parse(&mock::client(&url, None), "buy wnear", &options()).await;
+        server.join().unwrap();
+        assert!(matches!(result, Err(IntentChatError::Llm(LlmError::BadResponse(_)))));
+    }
 
-        let result = IntentChatParser::new(Some(url))
-            .parse("buy wnear", &options())
-            .await;
-        request.join().unwrap();
-
+    #[tokio::test]
+    async fn json_of_the_wrong_shape_is_rejected() {
+        let (url, server) = mock::serve(vec![mock::reply(r#"{"action": 5}"#)]);
+        let result = parse(&mock::client(&url, None), "buy wnear", &options()).await;
+        server.join().unwrap();
         assert!(matches!(result, Err(IntentChatError::InvalidResponse(_))));
     }
 
     #[tokio::test]
     async fn unreachable_model_is_reported_as_a_request_error() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
-
-        let result = IntentChatParser::new(Some(format!("http://{address}")))
-            .parse("buy wnear", &options())
-            .await;
-
-        assert!(matches!(result, Err(IntentChatError::Request(_))));
+        let result = parse(&mock::client(&mock::refused_url(), None), "buy wnear", &options()).await;
+        assert!(matches!(result, Err(IntentChatError::Llm(LlmError::Unreachable))));
     }
 }

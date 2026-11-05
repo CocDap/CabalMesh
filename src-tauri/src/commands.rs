@@ -948,7 +948,144 @@ async fn will_broadcast(state: &AppState) -> bool {
 pub async fn parse_intent_chat(text: String, state: State<'_, AppState>) -> Result<IntentFields, AppError> {
     let options = build_form_options(&state).await;
     let services = state.services()?;
-    services.intent_chat.parse(&text, &options).await.map_err(AppError::internal)
+    let client = services.llm().await;
+    crate::intent_chat::parse(&client, &text, &options).await.map_err(|error| match error {
+        crate::intent_chat::IntentChatError::Llm(error) => error.into(),
+        // Valid JSON of the wrong shape is still the model's answer being unusable.
+        other => AppError::from(crate::llm_client::LlmError::BadResponse(other.to_string())),
+    })
+}
+
+/// One choice in the Profile screen's preset list. Sent from here so that the URLs,
+/// which differ on the Android emulator, have one source.
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct LlmPresetView {
+    pub id: crate::llm_config::Preset,
+    pub label: String,
+    pub base_url: String,
+    pub model: String,
+}
+
+/// What the Profile screen shows of the model settings. Has no field a key could
+/// travel in: the screen only learns whether one is saved.
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct LlmSettingsView {
+    pub preset: crate::llm_config::Preset,
+    pub base_url: String,
+    pub model: String,
+    pub calls_per_hour: u32,
+    pub has_api_key: bool,
+    pub tools_supported: Option<bool>,
+    pub presets: Vec<LlmPresetView>,
+}
+
+#[must_use]
+pub fn llm_settings_view(settings: crate::llm_config::LlmSettings, has_api_key: bool) -> LlmSettingsView {
+    LlmSettingsView {
+        preset: settings.preset,
+        base_url: settings.base_url,
+        model: settings.model,
+        calls_per_hour: settings.calls_per_hour,
+        has_api_key,
+        tools_supported: settings.tools_supported,
+        presets: crate::llm_config::Preset::ALL
+            .into_iter()
+            .map(|preset| LlmPresetView {
+                id: preset,
+                label: preset.label().to_string(),
+                base_url: preset.base_url().to_string(),
+                model: preset.model().to_string(),
+            })
+            .collect(),
+    }
+}
+
+async fn current_llm_view(services: &crate::state::Services) -> LlmSettingsView {
+    let settings = crate::llm_config::load();
+    let has_api_key = services.identity.lock().await.llm_api_key(&settings).is_some();
+    llm_settings_view(settings, has_api_key)
+}
+
+/// This device's model settings, without the key.
+///
+/// # Errors
+///
+/// [`AppError::NotReady`] during bootstrap.
+#[tauri::command]
+pub async fn llm_get_settings(state: State<'_, AppState>) -> Result<LlmSettingsView, AppError> {
+    Ok(current_llm_view(&state.services()?).await)
+}
+
+/// Saves this device's model settings. A key stays with the URL it was saved for.
+///
+/// # Errors
+///
+/// [`AppError::InvalidIntent`] on a bad base URL or a limit outside 1 to 600.
+#[tauri::command]
+pub async fn llm_save_settings(
+    preset: crate::llm_config::Preset,
+    base_url: String,
+    model: String,
+    calls_per_hour: u32,
+    state: State<'_, AppState>,
+) -> Result<LlmSettingsView, AppError> {
+    let services = state.services()?;
+    let settings =
+        crate::llm_config::applied(&crate::llm_config::load(), preset, &base_url, &model, calls_per_hour)?;
+    crate::llm_config::save(&settings)?;
+    services.llm_budget.set_limit(calls_per_hour);
+
+    let ollama = services.ollama.clone();
+    tauri::async_runtime::spawn(async move { ollama.start_for(&settings).await });
+
+    Ok(current_llm_view(&services).await)
+}
+
+/// Saves the API key for the current settings. An empty key clears it.
+///
+/// # Errors
+///
+/// [`AppError::VaultLocked`] while the vault is locked. [`AppError::InvalidIntent`]
+/// if the current base URL would carry the key in the clear over the internet.
+#[tauri::command]
+pub async fn llm_set_api_key(key: String, state: State<'_, AppState>) -> Result<LlmSettingsView, AppError> {
+    let key = cabal_vault::Secret::new(key.trim());
+    let settings = crate::llm_config::load();
+    if !key.is_empty() && !crate::llm_config::key_may_travel_to(&settings.base_url) {
+        return Err(AppError::InvalidIntent { field: "BASE URL", reason: crate::error::InvalidReason::Insecure });
+    }
+    let services = state.services()?;
+    {
+        let identity = services.identity.lock().await;
+        if identity.is_locked() {
+            return Err(AppError::VaultLocked);
+        }
+        identity
+            .set_llm_api_key(&settings, (!key.is_empty()).then(|| key.expose()))
+            .map_err(|error| AppError::internal_msg(error))?;
+    }
+    Ok(current_llm_view(&services).await)
+}
+
+/// Tests the saved settings and remembers whether the model can call tools.
+///
+/// # Errors
+///
+/// [`AppError::NotReady`] during bootstrap. A failed test is a result, not an error.
+#[tauri::command]
+pub async fn llm_test_connection(state: State<'_, AppState>) -> Result<crate::llm_client::LlmProbe, AppError> {
+    let services = state.services()?;
+    let probe = services.llm().await.probe().await;
+    if probe.json_ok {
+        let mut settings = crate::llm_config::load();
+        settings.tools_supported = Some(probe.tools_ok);
+        crate::llm_config::save(&settings)?;
+    }
+    Ok(probe)
 }
 
 /// Validates a draft and returns what the confirm dialog shows.

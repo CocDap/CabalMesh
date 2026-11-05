@@ -1,8 +1,0 @@
----
-source: tests/ipc_contract.rs
----
-{
-  "content_type": "invoice",
-  "is_real_document": true,
-  "reasoning": "structured fields present"
-}

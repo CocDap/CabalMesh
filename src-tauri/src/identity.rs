@@ -178,6 +178,41 @@ impl IdentityStore {
         Ok(self.identity_vault.key()?)
     }
 
+    fn llm_key_file(&self) -> Result<crate::llm_config::KeyFile, Box<dyn Error>> {
+        Ok(crate::llm_config::KeyFile::new(&self.llm_keys_path(), self.identity_vault.key()?))
+    }
+
+    fn llm_keys_path(&self) -> PathBuf {
+        self.vault_path.with_file_name("llm_keys.enc")
+    }
+
+    /// The API key for these settings. `None` while the vault is locked.
+    #[must_use]
+    pub fn llm_api_key(&self, settings: &crate::llm_config::LlmSettings) -> Option<cabal_vault::Secret> {
+        self.llm_key_file().ok()?.get(settings.preset, &settings.base_url)
+    }
+
+    /// Saves or, with `None`, forgets the API key for these settings.
+    ///
+    /// # Errors
+    ///
+    /// The vault is locked, or the file could not be written.
+    pub fn set_llm_api_key(
+        &self,
+        settings: &crate::llm_config::LlmSettings,
+        key: Option<&str>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.llm_key_file()?.set(settings.preset, &settings.base_url, key)?;
+        Ok(())
+    }
+
+    /// Keeps saved API keys readable when `new_vault` replaces the current vault.
+    fn move_llm_keys(&self, new_vault: &Vault<Box<dyn cabal_vault::KeyProvider>>) -> Result<(), Box<dyn Error>> {
+        let to = crate::llm_config::KeyFile::new(&self.llm_keys_path(), new_vault.key()?);
+        self.llm_key_file()?.move_to(&to)?;
+        Ok(())
+    }
+
     /// Supplies a vault key reconstructed from guardian shares.
     ///
     /// Exactly [`Self::unlock_with_passphrase`]'s shape, deliberately: a
@@ -228,6 +263,10 @@ impl IdentityStore {
             return Err("re-encrypted vault did not read back identically".into());
         }
 
+        // Not fatal: the wallet is already re-encrypted, and an API key can be typed again.
+        if let Err(error) = self.move_llm_keys(&new_vault) {
+            tracing::warn!(target: "cabalmesh::llm", %error, "saved API keys were not re-encrypted");
+        }
         self.identity_vault = new_vault;
         // The old key protects nothing now; leaving it on disk would make
         // the KEYS screen's claim of passphrase protection false.
@@ -258,6 +297,10 @@ impl IdentityStore {
             return Err("re-encrypted vault did not read back identically".into());
         }
 
+        // Not fatal: the wallet is already re-encrypted, and an API key can be typed again.
+        if let Err(error) = self.move_llm_keys(&new_vault) {
+            tracing::warn!(target: "cabalmesh::llm", %error, "saved API keys were not re-encrypted");
+        }
         self.identity_vault = new_vault;
         let _ = fs::remove_file(&self.vault_salt_path);
 
@@ -431,6 +474,29 @@ mod security_tests {
             let _ = store.load_identities();
         }
         store
+    }
+
+    #[test]
+    fn llm_keys_follow_the_vault_through_a_passphrase_and_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp_dir = dir.path().to_path_buf();
+        let settings = crate::llm_config::LlmSettings::default();
+
+        let mut bridge = bridge_from_disk(&tmp_dir);
+        bridge.generate_new_identity("Test".to_string(), "🔐".to_string()).unwrap();
+        bridge.set_llm_api_key(&settings, Some("sk-test")).unwrap();
+        bridge.enable_passphrase("correct horse battery staple").unwrap();
+        assert_eq!(bridge.llm_api_key(&settings).unwrap().expose(), "sk-test");
+
+        let mut restarted = bridge_from_disk(&tmp_dir);
+        assert!(restarted.llm_api_key(&settings).is_none(), "locked means no key");
+        assert!(restarted.set_llm_api_key(&settings, Some("x")).is_err());
+
+        restarted.unlock_with_passphrase("correct horse battery staple").unwrap();
+        assert_eq!(restarted.llm_api_key(&settings).unwrap().expose(), "sk-test");
+
+        restarted.disable_passphrase().unwrap();
+        assert_eq!(bridge_from_disk(&tmp_dir).llm_api_key(&settings).unwrap().expose(), "sk-test");
     }
 
     #[test]

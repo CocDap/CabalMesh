@@ -7,7 +7,7 @@
  * downstream matches, and `tag = "kind"` so TypeScript gets a union it can
  * switch on.
  */
-export type AppError = { "kind": "not_ready", "detail": { subsystem: string, } } | { "kind": "unsupported", "detail": { feature: string, } } | { "kind": "mesh_offline" } | { "kind": "invalid_intent", "detail": { field: string, reason: InvalidReason, } } | { "kind": "chain", "detail": { retryable: boolean, } } | { "kind": "near_account_not_funded", "detail": { account: string, } } | { "kind": "vault_locked" } | { "kind": "too_many_subscriptions", "detail": { limit: number, } } | { "kind": "internal" };
+export type AppError = { "kind": "not_ready", "detail": { subsystem: string, } } | { "kind": "unsupported", "detail": { feature: string, } } | { "kind": "mesh_offline" } | { "kind": "invalid_intent", "detail": { field: string, reason: InvalidReason, } } | { "kind": "chain", "detail": { retryable: boolean, } } | { "kind": "near_account_not_funded", "detail": { account: string, } } | { "kind": "vault_locked" } | { "kind": "too_many_subscriptions", "detail": { limit: number, } } | { "kind": "model", "detail": { problem: ModelProblem, } } | { "kind": "internal" };
 
 export type AssetOption = { name: string, 
 /**
@@ -238,7 +238,24 @@ elapsed: string, };
  * Why an intent was rejected. A variant rather than a sentence, so the form
  * can render on-voice copy per field.
  */
-export type InvalidReason = "missing" | "malformed" | "out_of_range" | "too_precise" | "insufficient_funds";
+export type InvalidReason = "missing" | "malformed" | "out_of_range" | "too_precise" | "insufficient_funds" | "insecure";
+
+/**
+ * One choice in the Profile screen's preset list. Sent from here so that the URLs,
+ * which differ on the Android emulator, have one source.
+ */
+export type LlmPresetView = { id: Preset, label: string, baseUrl: string, model: string, };
+
+/**
+ * What a connection test found.
+ */
+export type LlmProbe = { reachable: boolean, jsonOk: boolean, toolsOk: boolean, latencyMs: number, error: string | null, };
+
+/**
+ * What the Profile screen shows of the model settings. Has no field a key could
+ * travel in: the screen only learns whether one is saved.
+ */
+export type LlmSettingsView = { preset: Preset, baseUrl: string, model: string, callsPerHour: number, hasApiKey: boolean, toolsSupported: boolean | null, presets: Array<LlmPresetView>, };
 
 /**
  * One rendered terminal line.
@@ -267,6 +284,11 @@ nodeId: string,
 uptime: string, connected: boolean, stats: Array<StatTile>, };
 
 export type ModeOption = { label: string, description: string, };
+
+/**
+ * What went wrong with a model call, so the screen can say what to fix.
+ */
+export type ModelProblem = "unreachable" | "refused" | "bad_answer" | "budget_used_up" | "no_model";
 
 /**
  * What the Vault's NEAR card shows.
@@ -319,6 +341,11 @@ x: number, y: number,
  * Milliseconds, also seeded, so the field does not pulse in unison.
  */
 pulseMs: number, };
+
+/**
+ * Where a set of model settings came from.
+ */
+export type Preset = "near-ai" | "ollama-local" | "openrouter" | "custom";
 
 /**
  * What the profile screen shows.

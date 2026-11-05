@@ -3,28 +3,80 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::ollama_config;
+use crate::llm_config::{LlmSettings, Preset};
 use crate::platform::CAN_SPAWN_PROCESSES;
 
 fn no_local_ollama() -> String {
-    format!(
-        "This platform cannot run a local Ollama server. Point the app at a remote one by \
-         setting {} or calling set_ollama_url (currently {}).",
-        ollama_config::ENV_VAR,
-        ollama_config::url()
-    )
+    "This platform cannot run a local Ollama server. Set a reachable base URL in Profile.".to_string()
+}
+
+/// Whether a base URL points at this machine, where this app could run the server.
+fn is_this_machine(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .is_ok_and(|url| matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")))
+}
+
+/// Ollama's own API sits beside its OpenAI-compatible `/v1`.
+fn tags_url(base_url: &str) -> String {
+    format!("{}/api/tags", base_url.strip_suffix("/v1").unwrap_or(base_url))
 }
 
 pub struct OllamaManager {
     process: Arc<Mutex<Option<Child>>>,
-    model_name: String,
 }
 
 impl OllamaManager {
-    pub fn new(model_name: Option<String>) -> Self {
-        OllamaManager {
-            process: Arc::new(Mutex::new(None)),
-            model_name: model_name.unwrap_or_else(|| "llama2".to_string()),
+    pub fn new() -> Self {
+        OllamaManager { process: Arc::new(Mutex::new(None)) }
+    }
+
+    /// Brings Ollama up for these settings when this device should run it: the
+    /// `ollama-local` preset, pointed at this machine, on a platform that can spawn
+    /// a process. Otherwise it only reports whether the server answers.
+    pub async fn start_for(&self, settings: &LlmSettings) {
+        if settings.preset != Preset::OllamaLocal {
+            return;
+        }
+        let url = &settings.base_url;
+        let running = self.health_check(url).await;
+
+        if !CAN_SPAWN_PROCESSES || !is_this_machine(url) {
+            if running {
+                tracing::info!("✅ Ollama at {} is healthy", url);
+            } else {
+                tracing::warn!("⚠️  No Ollama at {}. Set a reachable base URL in Profile.", url);
+            }
+            return;
+        }
+
+        if !self.is_installed() {
+            tracing::warn!("⚠️  Ollama not found. Install it from https://ollama.ai");
+            return;
+        }
+        if !running {
+            if let Err(error) = self.start_service() {
+                tracing::error!("❌ Failed to start Ollama: {}", error);
+                return;
+            }
+            for attempt in 1..=10 {
+                if self.health_check(url).await {
+                    tracing::info!("✅ Ollama service is healthy");
+                    break;
+                }
+                if attempt == 10 {
+                    tracing::warn!("⚠️  Ollama service not responding");
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+
+        let model = settings.model.trim().to_string();
+        if !model.is_empty() {
+            tokio::task::spawn_blocking(move || {
+                if let Err(error) = pull_model(&model) {
+                    tracing::warn!("⚠️  Warning: {}", error);
+                }
+            });
         }
     }
 
@@ -74,73 +126,10 @@ impl OllamaManager {
         }
     }
 
-    /// Pull the AI model if not already available
-    pub fn pull_model(&self) -> Result<(), String> {
-        if !CAN_SPAWN_PROCESSES {
-            return Err(no_local_ollama());
-        }
-
-        tracing::info!("📥 Checking for model: {}", self.model_name);
-
-        // Check if model exists
-        let list_output = Command::new("ollama")
-            .arg("list")
-            .output()
-            .map_err(|e| format!("Failed to list models: {}", e))?;
-
-        let list_str = String::from_utf8_lossy(&list_output.stdout);
-        
-        if list_str.contains(&self.model_name) {
-            tracing::info!("✅ Model {} already available", self.model_name);
-            return Ok(());
-        }
-
-        // Pull the model
-        tracing::info!("📥 Pulling model {} (this may take a few minutes)...", self.model_name);
-        
-        let output = Command::new("ollama")
-            .arg("pull")
-            .arg(&self.model_name)
-            .output()
-            .map_err(|e| format!("Failed to pull model: {}", e))?;
-
-        if output.status.success() {
-            tracing::info!("✅ Model {} downloaded successfully", self.model_name);
-            Ok(())
-        } else {
-            Err(format!(
-                "Failed to pull model: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ))
-        }
-    }
-
-    /// Initialize Ollama (start service + pull model)
-    pub async fn initialize(&self) -> Result<(), String> {
-        // Start the service
-        self.start_service()?;
-
-        // Pull the model in the background
-        let model_name = self.model_name.clone();
-        tokio::task::spawn_blocking(move || {
-            let manager = OllamaManager::new(Some(model_name));
-            if let Err(e) = manager.pull_model() {
-                tracing::warn!("⚠️  Warning: {}", e);
-            }
-        });
-
-        Ok(())
-    }
-
     /// Check if Ollama service is responding
-    pub async fn health_check(&self) -> bool {
+    pub async fn health_check(&self, base_url: &str) -> bool {
         let client = reqwest::Client::new();
-        match client
-            .get(format!("{}/api/tags", ollama_config::url()))
-            .timeout(Duration::from_secs(2))
-            .send()
-            .await
-        {
+        match client.get(tags_url(base_url)).timeout(Duration::from_secs(2)).send().await {
             Ok(response) => response.status().is_success(),
             Err(_) => false,
         }
@@ -159,5 +148,62 @@ impl OllamaManager {
 impl Drop for OllamaManager {
     fn drop(&mut self) {
         self.stop_service();
+    }
+}
+
+/// Pull the AI model if not already available
+fn pull_model(model: &str) -> Result<(), String> {
+    if !CAN_SPAWN_PROCESSES {
+        return Err(no_local_ollama());
+    }
+
+    tracing::info!("📥 Checking for model: {}", model);
+
+    let list_output =
+        Command::new("ollama").arg("list").output().map_err(|e| format!("Failed to list models: {}", e))?;
+    if String::from_utf8_lossy(&list_output.stdout).contains(model) {
+        tracing::info!("✅ Model {} already available", model);
+        return Ok(());
+    }
+
+    tracing::info!("📥 Pulling model {} (this may take a few minutes)...", model);
+    let output =
+        Command::new("ollama").arg("pull").arg(model).output().map_err(|e| format!("Failed to pull model: {}", e))?;
+    if output.status.success() {
+        tracing::info!("✅ Model {} downloaded successfully", model);
+        Ok(())
+    } else {
+        Err(format!("Failed to pull model: {}", String::from_utf8_lossy(&output.stderr)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_server_on_this_machine_is_ours_to_start() {
+        assert!(is_this_machine("http://localhost:11434/v1"));
+        assert!(is_this_machine("http://127.0.0.1:11434/v1"));
+        assert!(!is_this_machine("http://192.168.1.9:11434/v1"));
+        assert!(!is_this_machine("https://cloud-api.near.ai/v1"));
+    }
+
+    #[test]
+    fn its_health_check_uses_ollamas_own_api() {
+        assert_eq!(tags_url("http://localhost:11434/v1"), "http://localhost:11434/api/tags");
+    }
+
+    #[tokio::test]
+    async fn a_hosted_preset_starts_nothing() {
+        // Would try `ollama` if it got past the preset check; finishing is the point.
+        let settings = LlmSettings {
+            preset: Preset::OpenRouter,
+            base_url: Preset::OpenRouter.base_url().into(),
+            ..LlmSettings::default()
+        };
+        let manager = OllamaManager::new();
+        manager.start_for(&settings).await;
+        assert!(manager.process.lock().unwrap().is_none());
     }
 }

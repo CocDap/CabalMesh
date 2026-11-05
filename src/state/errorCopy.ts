@@ -1,4 +1,4 @@
-import type { AppError } from "../types/bindings";
+import type { AppError, ModelProblem } from "../types/bindings";
 
 /**
  * Brand-voice copy for a typed error.
@@ -34,8 +34,26 @@ export function errorCopy(failure: unknown): string {
       return "The vault is locked. No key is available.";
     case "too_many_subscriptions":
       return "Too many live streams. Close a screen and retry.";
+    case "model":
+      return modelCopy(error.detail.problem);
     case "internal":
       return "The request was refused. Nothing was sent.";
+  }
+}
+
+/** What to fix, and where. Every one of these is fixed in Profile. */
+function modelCopy(problem: ModelProblem): string {
+  switch (problem) {
+    case "unreachable":
+      return "The model did not answer. Check the base URL in Profile.";
+    case "refused":
+      return "The model endpoint refused. Check the key and model in Profile.";
+    case "bad_answer":
+      return "The model's answer could not be read. Fill the form by hand.";
+    case "budget_used_up":
+      return "The hourly AI call limit is used up. Raise it in Profile.";
+    case "no_model":
+      return "No model is set. Choose one in Profile.";
   }
 }
 
@@ -51,6 +69,8 @@ function invalidCopy(field: string, reason: AppErrorReason): string {
       return `${name} is outside what this allows.`;
     case "too_precise":
       return `${name} carries more decimals than this asset has.`;
+    case "insecure":
+      return `${name} must use https to carry a key.`;
     case "insufficient_funds":
       return "Balance does not cover this intent.";
     default:

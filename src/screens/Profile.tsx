@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Badge, Button, Icon, Panel, Switch } from "../ds";
 import type { GlyphName } from "../shell/screen";
 import type { ProfileView } from "../types/bindings";
+import { AiSettings } from "./AiSettings";
 
 const ROWS: ReadonlyArray<{ label: string; icon: GlyphName }> = [
   { label: "ACHIEVEMENTS", icon: "reputation" },
@@ -149,6 +150,8 @@ export function Profile({ onLeave }: { onLeave: () => void }) {
           )}
         </div>
       </Panel>
+
+      <AiSettings />
 
       <Panel>
         {ROWS.map((row) => (

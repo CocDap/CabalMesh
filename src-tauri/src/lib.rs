@@ -1,14 +1,12 @@
 mod app_initializer;
 mod app_paths;
 mod platform;
-mod ollama_config;
 mod ollama_manager;
 mod negotiation;
 
 // Public because their types *are* the IPC contract: everything below
 // serializes across the boundary to the webview, so the shapes are already
 // public API whether or not Rust says so. `tests/ipc_contract.rs` pins them.
-pub mod agent;
 pub mod balances;
 pub mod identity;
 pub mod mesh;
@@ -42,6 +40,9 @@ mod security_state;
 pub mod guardian;
 pub mod guardian_actor;
 pub mod intent_chat;
+pub mod llm_budget;
+pub mod llm_client;
+pub mod llm_config;
 
 /// The Android Wi-Fi multicast lock mDNS needs. See src/multicast.rs.
 pub mod multicast;
@@ -75,7 +76,6 @@ pub mod bindings;
 pub mod error;
 
 use app_initializer::SystemBootstrap;
-use agent::SharkAgent;
 use ollama_manager::OllamaManager;
 use identity::IdentityStore;
 use std::sync::atomic::AtomicU64;
@@ -122,59 +122,15 @@ pub fn run() {
 
             let app_handle = app.handle().clone();
 
-            // Create consistent Ollama instance
-            let ollama_manager = Arc::new(OllamaManager::new(Some(
-                ollama_config::INTENT_MODEL.to_string(),
-            )));
+            // Only when this device's settings call for it. See `start_for`.
+            let llm_settings = llm_config::load();
+            let llm_budget = Arc::new(llm_budget::LlmBudget::new(llm_settings.calls_per_hour));
+            let ollama_manager = Arc::new(OllamaManager::new());
             let ollama_init = ollama_manager.clone();
-            
-            // Initialize Ollama in background
             tauri::async_runtime::spawn(async move {
-                let ollama = ollama_init;
-
-                // Mobile cannot spawn a local server, so there is nothing to
-                // install or start — just check whether the configured remote
-                // is reachable.
-                if !platform::CAN_SPAWN_PROCESSES {
-                    let url = ollama_config::url();
-                    tracing::info!("🔍 Checking remote Ollama at {}...", url);
-                    if ollama.health_check().await {
-                        tracing::info!("✅ Remote Ollama is healthy");
-                    } else {
-                        tracing::warn!("⚠️  No Ollama at {}", url);
-                        tracing::warn!("📝 Set one with the set_ollama_url command or ${}", ollama_config::ENV_VAR);
-                    }
-                    return;
-                }
-
-                tracing::info!("🔍 Checking Ollama installation...");
-                if !ollama.is_installed() {
-                    tracing::warn!("⚠️  Ollama not found!");
-                    tracing::warn!("📝 Please install from: https://ollama.ai");
-                    tracing::warn!("   Or run: brew install ollama");
-                } else {
-                    match ollama.initialize().await {
-                        Ok(_) => {
-                            tracing::info!("✅ Ollama ready!");
-                            for i in 1..=10 {
-                                if ollama.health_check().await {
-                                    tracing::info!("✅ Ollama service is healthy");
-                                    break;
-                                }
-                                if i == 10 {
-                                    tracing::warn!("⚠️  Ollama service not responding");
-                                }
-                                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("❌ Failed to initialize Ollama: {}", e);
-                        }
-                    }
-                }
+                ollama_init.start_for(&llm_settings).await;
             });
 
-            // Pass strong reference to mesh setup to store in AppState
             let ollama_state = ollama_manager.clone();
 
             // Initialize System via Bootstrap Workflow
@@ -443,9 +399,8 @@ pub fn run() {
                             mesh: Some(mesh_handle),
                             ble: ble.clone(),
                             ble_transport: ble_transport.clone(),
-                            agent: Arc::new(SharkAgent::new(None)),
-                            intent_chat: Arc::new(intent_chat::IntentChatParser::new(None)),
                             ollama: ollama_state,
+                            llm_budget,
                             identity,
                             http,
                             guardian: guardian_service.clone(),
@@ -469,9 +424,8 @@ pub fn run() {
                             mesh: None,
                             ble,
                             ble_transport,
-                            agent: Arc::new(SharkAgent::new(None)),
-                            intent_chat: Arc::new(intent_chat::IntentChatParser::new(None)),
                             ollama: ollama_state,
+                            llm_budget,
                             identity,
                             http,
                             guardian: guardian_service,
@@ -499,6 +453,10 @@ pub fn run() {
             commands::ble_status,
             commands::list_intents,
             commands::intent_form_options,
+            commands::llm_get_settings,
+            commands::llm_save_settings,
+            commands::llm_set_api_key,
+            commands::llm_test_connection,
             commands::parse_intent_chat,
             commands::preview_intent,
             commands::broadcast_intent,

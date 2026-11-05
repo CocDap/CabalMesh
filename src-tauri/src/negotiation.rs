@@ -3,10 +3,10 @@
 //! # What runs where
 //!
 //! Every node runs its own copy of this: there is no matchmaker service, only
-//! each device's own [`crate::intents::Ledger`] and whatever local Ollama
-//! model it has configured. When an intent arrives from the mesh, this module
+//! each device's own [`crate::intents::Ledger`] and whatever model it has
+//! configured. When an intent arrives from the mesh, this module
 //! checks it against this device's *own* open intents for the opposite side
-//! of the same asset. If the price ranges overlap, the local model proposes a
+//! of the same asset. If the price ranges overlap, that model proposes a
 //! settlement price, and this device broadcasts a `DealAccepted` — the exact
 //! wire message [`crate::intents::apply_mesh_event`] already knows how to
 //! read, it just never had a sender before this.
@@ -30,15 +30,16 @@
 //! since it needs no round trip to learn about a decision it just made.
 
 use crate::intents::{line, now_ms};
+use crate::llm_client::LlmClient;
 use crate::mesh::PrivacyIntent;
 use crate::state::AppState;
 use cabal_core::{Action, Condition, IntentDraft, IntentStatus, UsdPrice};
 use serde::Deserialize;
 use std::time::Duration;
 
-/// How long to wait on the local model before falling back to a plain split
-/// of the range. Short on purpose: this runs unattended in the background for
-/// every intent the mesh delivers, and a slow or hung Ollama must not stall
+/// How long to wait on the model before falling back to a plain split of the
+/// range. Short on purpose: this runs unattended in the background for every
+/// intent the mesh delivers, and a slow or hung model must not stall
 /// the mesh event loop it competes with — see the `tokio::spawn` at each call
 /// site in `lib.rs`.
 const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(20);
@@ -104,8 +105,8 @@ pub async fn consider(state: &AppState, incoming: &PrivacyIntent) {
         return;
     };
 
-    let ollama_url = crate::ollama_config::url();
-    let (price, method) = negotiate_price(&ollama_url, &own_draft, &theirs, floor, ceiling).await;
+    let client = services.llm().await;
+    let (price, method) = negotiate_price(&client, &own_draft, &theirs, floor, ceiling).await;
     tracing::info!(
         target: "cabalmesh::negotiation",
         asset = %own_draft.asset,
@@ -241,18 +242,18 @@ fn price_bounds(own: &IntentDraft, theirs: &IntentDraft) -> Option<(Option<UsdPr
 }
 
 /// Settles on one price within `[floor, ceiling]` (either bound may be
-/// absent, never both — see [`price_bounds`]): asks the local model for a
-/// fair number, and falls back to a deterministic one whenever the model is
-/// unreachable, slow, or answers with something outside the range this
-/// device already verified independently.
+/// absent, never both — see [`price_bounds`]): asks the model for a fair
+/// number, and falls back to a deterministic one whenever the model is
+/// unreachable, slow, over its call budget, or answers with something outside
+/// the range this device already verified independently.
 async fn negotiate_price(
-    ollama_url: &str,
+    client: &LlmClient,
     own: &IntentDraft,
     theirs: &IntentDraft,
     floor: Option<UsdPrice>,
     ceiling: Option<UsdPrice>,
 ) -> (UsdPrice, &'static str) {
-    match tokio::time::timeout(NEGOTIATION_TIMEOUT, ask_model(ollama_url, own, theirs, floor, ceiling)).await {
+    match tokio::time::timeout(NEGOTIATION_TIMEOUT, ask_model(client, own, theirs, floor, ceiling)).await {
         Ok(Some(price)) if within(price, floor, ceiling) => (price, "ai"),
         _ => (deterministic_settlement(floor, ceiling), "fallback"),
     }
@@ -281,27 +282,13 @@ struct PriceResponse {
     price: f64,
 }
 
-#[derive(Debug, serde::Serialize)]
-struct OllamaRequest {
-    model: &'static str,
-    prompt: String,
-    stream: bool,
-    system: String,
-    format: &'static str,
-}
-
-#[derive(Debug, Deserialize)]
-struct OllamaResponse {
-    response: String,
-}
-
-/// Asks the local model to propose one fair settlement price for the trade.
+/// Asks the model to propose one fair settlement price for the trade.
 /// `None` on any failure — network, timeout, or a response that does not
 /// parse — which the caller treats identically to "the model disagreed with
 /// itself": fall back rather than error, since a background match is not a
 /// user action waiting on a result.
 async fn ask_model(
-    ollama_url: &str,
+    client: &LlmClient,
     own: &IntentDraft,
     theirs: &IntentDraft,
     floor: Option<UsdPrice>,
@@ -321,25 +308,8 @@ Respond ONLY with JSON in this exact format: {{"price": <number>}}"#,
         floor = floor.map_or("no stated limit".to_string(), |f| f.to_string()),
     );
 
-    let request = OllamaRequest {
-        model: crate::ollama_config::INTENT_MODEL,
-        prompt: "Propose the settlement price now.".to_string(),
-        stream: false,
-        system,
-        format: "json",
-    };
-
-    let response = reqwest::Client::new()
-        .post(format!("{ollama_url}/api/generate"))
-        .json(&request)
-        .send()
-        .await
-        .ok()?
-        .error_for_status()
-        .ok()?;
-    let body: OllamaResponse = response.json().await.ok()?;
-    let parsed: PriceResponse =
-        serde_json::from_str(crate::llm_json::extract_json_object(&body.response)).ok()?;
+    let answer = client.chat_json(&system, "Propose the settlement price now.").await.ok()?;
+    let parsed: PriceResponse = serde_json::from_value(answer).ok()?;
 
     if !parsed.price.is_finite() || parsed.price < 0.0 {
         return None;
@@ -350,6 +320,7 @@ Respond ONLY with JSON in this exact format: {{"price": <number>}}"#,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm_client::mock;
     use cabal_core::{ExecutionMode, PrivacyLevel, TokenAmount};
 
     fn draft(action: Action, asset: &str, condition: Condition) -> IntentDraft {
@@ -411,19 +382,49 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_model_still_settles_within_range() {
-        // A bound-then-dropped listener refuses the connection immediately,
-        // independent of whatever Ollama the developer running this test may
-        // or may not have listening on the real default URL — see the same
-        // pattern in `intent_chat.rs`'s `unreachable_model_is_reported...`.
+        let buy = draft(Action::Buy, "wNEAR", Condition::Under { price: usd(1200) });
+        let sell = draft(Action::Sell, "wNEAR", Condition::Above { price: usd(900) });
+        let client = mock::client(&mock::refused_url(), None);
+        let (price, method) = negotiate_price(&client, &buy, &sell, Some(usd(900)), Some(usd(1200))).await;
+        assert_eq!(method, "fallback");
+        assert!(within(price, Some(usd(900)), Some(usd(1200))));
+    }
+
+    #[tokio::test]
+    async fn a_price_within_range_comes_from_the_model() {
+        let (url, server) = mock::serve(vec![mock::reply(r#"{"price": 10.25}"#)]);
+        let buy = draft(Action::Buy, "wNEAR", Condition::Under { price: usd(1200) });
+        let sell = draft(Action::Sell, "wNEAR", Condition::Above { price: usd(900) });
+        let result =
+            negotiate_price(&mock::client(&url, None), &buy, &sell, Some(usd(900)), Some(usd(1200))).await;
+        server.join().unwrap();
+        assert_eq!(result, (usd(1025), "ai"));
+    }
+
+    #[tokio::test]
+    async fn a_price_outside_the_range_is_not_believed() {
+        let (url, server) = mock::serve(vec![mock::reply(r#"{"price": 99999}"#)]);
+        let buy = draft(Action::Buy, "wNEAR", Condition::Under { price: usd(1200) });
+        let sell = draft(Action::Sell, "wNEAR", Condition::Above { price: usd(900) });
+        let result =
+            negotiate_price(&mock::client(&url, None), &buy, &sell, Some(usd(900)), Some(usd(1200))).await;
+        server.join().unwrap();
+        assert_eq!(result, (usd(1050), "fallback"));
+    }
+
+    #[tokio::test]
+    async fn negotiation_falls_back_when_budget_exhausted() {
+        // A live listener that must see nothing: a used-up budget sends no request.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let client = mock::client_with_budget(&url, None, 0);
 
         let buy = draft(Action::Buy, "wNEAR", Condition::Under { price: usd(1200) });
         let sell = draft(Action::Sell, "wNEAR", Condition::Above { price: usd(900) });
-        let (price, method) =
-            negotiate_price(&format!("http://{address}"), &buy, &sell, Some(usd(900)), Some(usd(1200))).await;
-        assert_eq!(method, "fallback");
-        assert!(within(price, Some(usd(900)), Some(usd(1200))));
+        let result = negotiate_price(&client, &buy, &sell, Some(usd(900)), Some(usd(1200))).await;
+
+        assert_eq!(result, (deterministic_settlement(Some(usd(900)), Some(usd(1200))), "fallback"));
+        assert!(listener.accept().is_err(), "no request should have been made");
     }
 }

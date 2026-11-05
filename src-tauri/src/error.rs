@@ -94,6 +94,12 @@ pub enum AppError {
     #[error("too many active subscriptions")]
     TooManySubscriptions { limit: u16 },
 
+    /// The model call failed in a way the user can fix in Profile.
+    ///
+    /// Carries no text: a provider's error can name the endpoint.
+    #[error("model call failed")]
+    Model { problem: ModelProblem },
+
     /// Something went wrong that the frontend cannot act on.
     ///
     /// Carries nothing. The real error is logged; see [`AppError::internal`].
@@ -118,6 +124,38 @@ pub enum InvalidReason {
     TooPrecise,
     /// Balance does not cover it.
     InsufficientFunds,
+    /// Would send a secret where it can be read on the wire.
+    Insecure,
+}
+
+/// What went wrong with a model call, so the screen can say what to fix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ModelProblem {
+    Unreachable,
+    /// The endpoint answered with an error: usually a bad key or model name.
+    Refused,
+    /// The model answered with something unusable.
+    BadAnswer,
+    BudgetUsedUp,
+    NoModel,
+}
+
+impl From<crate::llm_client::LlmError> for AppError {
+    fn from(error: crate::llm_client::LlmError) -> Self {
+        use crate::llm_client::LlmError;
+        tracing::warn!(target: "cabalmesh::llm", %error, "model call failed");
+        let problem = match error {
+            LlmError::Unreachable => ModelProblem::Unreachable,
+            LlmError::Http { .. } => ModelProblem::Refused,
+            LlmError::BadResponse(_) => ModelProblem::BadAnswer,
+            LlmError::BudgetExhausted => ModelProblem::BudgetUsedUp,
+            LlmError::NoModel => ModelProblem::NoModel,
+        };
+        Self::Model { problem }
+    }
 }
 
 impl AppError {
@@ -156,6 +194,7 @@ impl AppError {
         match self {
             Self::MeshOffline | Self::NotReady { .. } => true,
             Self::Chain { retryable } => *retryable,
+            Self::Model { problem } => matches!(problem, ModelProblem::Unreachable),
             Self::Unsupported { .. }
             | Self::InvalidIntent { .. }
             | Self::NearAccountNotFunded { .. }

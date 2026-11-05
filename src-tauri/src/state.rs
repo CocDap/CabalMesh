@@ -31,7 +31,6 @@
 //! point, and paying for an async lock to guard a pointer copy is exactly the
 //! case it warns about.
 
-use crate::agent::SharkAgent;
 use crate::error::AppError;
 use crate::identity::IdentityStore;
 use crate::near_bridge::NearBridge;
@@ -67,9 +66,9 @@ pub struct Services {
     /// `loopback` is not Bluetooth, and a UI that called it that would be
     /// claiming a capability the build does not have.
     pub ble_transport: String,
-    pub agent: Arc<SharkAgent>,
-    pub intent_chat: Arc<crate::intent_chat::IntentChatParser>,
     pub ollama: Arc<OllamaManager>,
+    /// One budget, so every model call on this device counts against it.
+    pub llm_budget: Arc<crate::llm_budget::LlmBudget>,
     pub identity: Arc<Mutex<IdentityStore>>,
     /// One client, so every NEAR call shares its connection pool.
     pub http: reqwest::Client,
@@ -97,6 +96,14 @@ impl Services {
         NearBridge::new(config.rpc_url(), &config.verifier(), keypair, self.http.clone())
             .map(|bridge| bridge.with_gateway_fee(fee))
             .map_err(AppError::internal)
+    }
+
+    /// A model client for this device's current settings. Built per use, so a change
+    /// in Profile applies to the next call. Has no key while the vault is locked.
+    pub async fn llm(&self) -> crate::llm_client::LlmClient {
+        let settings = crate::llm_config::load();
+        let key = self.identity.lock().await.llm_api_key(&settings);
+        crate::llm_client::LlmClient::new(settings, key, self.http.clone(), self.llm_budget.clone())
     }
 }
 

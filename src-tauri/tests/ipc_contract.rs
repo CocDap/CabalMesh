@@ -26,7 +26,6 @@
 
 use cabal_core::Chain;
 use cabal_near::{token_diff_payload, AccountId, NearKeypair, TokenDiff};
-use cabalmesh_lib::agent::ContentAnalysis;
 use cabalmesh_lib::bindings::GuardianUnlockPrompt;
 use cabalmesh_lib::commands::{
     GuardianCandidate, GuardianEnrollResult, GuardianStatus, NearAccountView, NearTokenView, SecurityStatus,
@@ -120,12 +119,31 @@ fn security_status_shape() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn content_analysis_shape() {
-    insta::assert_snapshot!(shape(&ContentAnalysis {
-        content_type: "invoice".into(),
-        is_real_document: true,
-        reasoning: "structured fields present".into(),
-    }));
+fn get_settings_never_returns_key() {
+    let settings = cabalmesh_lib::llm_config::LlmSettings::default();
+    let view = serde_json::to_value(cabalmesh_lib::commands::llm_settings_view(settings, true)).unwrap();
+    let mut fields: Vec<_> = view.as_object().unwrap().keys().map(String::as_str).collect();
+    fields.sort_unstable();
+    // Exact on purpose: a new field here crosses to the webview, so it has to be
+    // added by someone looking at this list.
+    assert_eq!(
+        fields,
+        ["baseUrl", "callsPerHour", "hasApiKey", "model", "preset", "presets", "toolsSupported"]
+    );
+    assert_eq!(view["hasApiKey"], true);
+    assert_eq!(view["preset"], "ollama-local");
+}
+
+#[test]
+fn llm_presets_are_listed_in_the_screens_order() {
+    let settings = cabalmesh_lib::llm_config::LlmSettings::default();
+    let view = serde_json::to_value(cabalmesh_lib::commands::llm_settings_view(settings, false)).unwrap();
+    let ids: Vec<_> = view["presets"].as_array().unwrap().iter().map(|preset| preset["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["near-ai", "ollama-local", "openrouter", "custom"]);
+    assert_eq!(view["presets"][0]["baseUrl"], "https://cloud-api.near.ai/v1");
+    assert_eq!(view["presets"][2]["baseUrl"], "https://openrouter.ai/api/v1");
+    assert_eq!(view["presets"][1]["model"], "llama3.1:8b");
+    assert_eq!(view["presets"][0]["model"], "");
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +279,10 @@ fn command_inventory() {
         "near_account",
         "near_deposit",
         "near_withdraw",
+        "llm_get_settings",
+        "llm_save_settings",
+        "llm_set_api_key",
+        "llm_test_connection",
         "network_set",
         "parse_intent_chat",
         "preview_intent",
@@ -284,6 +306,6 @@ fn command_inventory() {
         "vault_keys",
     ];
     commands.sort_unstable();
-    assert_eq!(commands.len(), 40, "command count changed");
+    assert_eq!(commands.len(), 44, "command count changed");
     insta::assert_snapshot!(commands.join("\n"));
 }
