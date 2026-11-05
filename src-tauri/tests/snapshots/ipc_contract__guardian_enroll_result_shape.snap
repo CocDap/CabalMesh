@@ -1,0 +1,12 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&GuardianEnrollResult\n{\n    enrolled: vec![\"7f3a1209c2e100aa\".into()], no_reply:\n    vec![\"91bec2e10800aabb\".into()],\n})"
+---
+{
+  "enrolled": [
+    "7f3a1209c2e100aa"
+  ],
+  "noReply": [
+    "91bec2e10800aabb"
+  ]
+}

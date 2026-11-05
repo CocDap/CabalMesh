@@ -1,0 +1,23 @@
+[package]
+name = "cabal-near"
+version = "0.1.0"
+edition = "2021"
+description = "NEAR keys, NEP-413 signing and NEAR Intents payloads for CabalMesh."
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+base64 = "0.22"
+borsh = { version = "1", features = ["derive"] }
+bs58 = "0.5"
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+ed25519-dalek = { version = "2", features = ["zeroize"] }
+hex = "0.4"
+rand = "0.9"
+sha2 = "0.10"
+zeroize = "1"
+
+[lints]
+workspace = true

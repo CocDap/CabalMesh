@@ -1,0 +1,9 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&SettlementComplete\n{\n    deal_id: \"a:b\".into(), tx_hash:\n    \"G1s5UDrB6f2phA7RdNvYnp8ehDninikrwFYqsESDVef5\".into(), gateway:\n    \"339c6d2483fb8cf7ed7864b224ac4606aa426d0f0415614914880af313decc93\".into(),\n})"
+---
+{
+  "dealId": "a:b",
+  "txHash": "G1s5UDrB6f2phA7RdNvYnp8ehDninikrwFYqsESDVef5",
+  "gateway": "339c6d2483fb8cf7ed7864b224ac4606aa426d0f0415614914880af313decc93"
+}

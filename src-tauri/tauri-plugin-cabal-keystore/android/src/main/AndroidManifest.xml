@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      No permissions. The Android Keystore is reachable by any app for its own
+      keys, and this plugin never touches anyone else's — a declared permission
+      here would be one the user is asked to grant for nothing.
+    -->
+</manifest>

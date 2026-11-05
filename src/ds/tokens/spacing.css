@@ -1,0 +1,38 @@
+/* CabalMesh spacing. 2px base unit - the layout is drawn on graph paper. */
+:root{
+  --space-0:0px;
+  --space-1:2px;
+  --space-2:4px;
+  --space-3:6px;
+  --space-4:8px;
+  --space-5:12px;
+  --space-6:16px;
+  --space-7:20px;
+  --space-8:24px;
+  --space-9:32px;
+  --space-10:40px;
+  --space-11:48px;
+  --space-12:64px;
+  --space-13:80px;
+  --space-14:96px;
+  --space-15:128px;
+  --space-16:160px;
+
+  /* semantic */
+  --panel-pad:var(--space-8);
+  --panel-pad-tight:var(--space-5);
+  --panel-gap:var(--space-4);
+  --stack-gap:var(--space-5);
+  --inline-gap:var(--space-4);
+  --field-pad-x:var(--space-5);
+  --field-pad-y:var(--space-4);
+  --btn-pad-x:var(--space-8);
+  --btn-pad-y:var(--space-5);
+  --btn-pad-x-sm:var(--space-5);
+  --btn-pad-y-sm:var(--space-3);
+  --nav-h:52px;
+  --statusbar-h:34px;
+  --grid-unit:8px;
+  --measure-body:64ch; /* @kind other */
+  --measure-display:22ch; /* @kind other */
+}

@@ -1,0 +1,32 @@
+[package]
+name = "cabal-guardian"
+version = "0.1.0"
+edition = "2021"
+description = "Crypto for mesh-guardian recovery: Shamir shares over a vault key, sealed to a guardian's public key."
+publish = false
+
+[dependencies]
+# The vault's data key is exactly what gets split — reusing its type rather
+# than a bare [u8; 32] means a share can never be mistaken for, or silently
+# swapped with, some other 32-byte value in the system.
+cabal-vault = { path = "../cabal-vault" }
+thiserror = { workspace = true }
+zeroize = { version = "1", features = ["derive"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# GF(256) Shamir. `zeroize_memory` is the feature name upstream actually
+# gates its `Zeroize` derive on `Share` behind — plain `zeroize` is only the
+# name of the optional dependency, and enabling that alone would pull in the
+# crate without the drop-time zeroing it's here for.
+sharks = { version = "0.5", default-features = false, features = ["std", "zeroize_memory"] }
+# Sealed-box encryption to a guardian's known static key. All three are
+# already resolved in the workspace's Cargo.lock via libp2p-noise, just
+# never a direct dependency of anything until now — see the module docs in
+# sealed.rs for why a live Noise session isn't a prerequisite here.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+sha2 = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+[lints]
+workspace = true

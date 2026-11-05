@@ -1,0 +1,31 @@
+[package]
+name = "cabal-ble"
+version = "0.1.0"
+edition = "2021"
+description = "CabalMesh BLE mesh protocol: wire format, flood routing, sessions. No I/O, no radio."
+publish = false
+
+[dependencies]
+# Kept deliberately narrow, for the same reason cabal-core is: this crate is
+# the one that has to be testable thousands of cases at a time on the host,
+# because the hardware it targets cannot be driven from CI at all.
+#
+# No tokio, no tauri, no libp2p. Time arrives as a parameter and the radio
+# leaves as a return value — see src/engine.rs.
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# Already in the app's dependency tree via libp2p, so it costs no
+# additional binary size on a platform where scripts/ios-size.sh exists to
+# watch exactly that.
+sha2 = "0.10"
+# Also already present via libp2p-identity. Announcements must be signed:
+# without it, anyone who overhears one can replay it with a different
+# neighbour list, which is how a mesh is made to route into a hole.
+ed25519-dalek = "2"
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

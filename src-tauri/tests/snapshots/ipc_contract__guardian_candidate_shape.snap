@@ -1,0 +1,9 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&GuardianCandidate\n{ peer_id: \"7f3a1209c2e100aa\".into(), label: \"7F3A…00AA\".into(), hops: 1, })"
+---
+{
+  "peerId": "7f3a1209c2e100aa",
+  "label": "7F3A…00AA",
+  "hops": 1
+}

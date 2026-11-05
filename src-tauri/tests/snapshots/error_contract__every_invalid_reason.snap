@@ -1,0 +1,42 @@
+---
+source: tests/error_contract.rs
+---
+{
+  "kind": "invalid_intent",
+  "detail": {
+    "field": "amount",
+    "reason": "missing"
+  }
+}
+---
+{
+  "kind": "invalid_intent",
+  "detail": {
+    "field": "amount",
+    "reason": "malformed"
+  }
+}
+---
+{
+  "kind": "invalid_intent",
+  "detail": {
+    "field": "amount",
+    "reason": "out_of_range"
+  }
+}
+---
+{
+  "kind": "invalid_intent",
+  "detail": {
+    "field": "amount",
+    "reason": "too_precise"
+  }
+}
+---
+{
+  "kind": "invalid_intent",
+  "detail": {
+    "field": "amount",
+    "reason": "insufficient_funds"
+  }
+}

@@ -1,0 +1,9 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&IdentityView\n{\n    alias: \"Genesis Fox\".into(), emoji: \"🦊\".into(), address:\n    \"b6336d522196d849252c5dbef77215710abf748ac53afc63ece79378d188b1ff\".into(),\n})"
+---
+{
+  "alias": "Genesis Fox",
+  "emoji": "🦊",
+  "address": "b6336d522196d849252c5dbef77215710abf748ac53afc63ece79378d188b1ff"
+}

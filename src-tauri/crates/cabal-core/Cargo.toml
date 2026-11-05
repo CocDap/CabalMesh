@@ -1,0 +1,27 @@
+[package]
+name = "cabal-core"
+version = "0.1.0"
+edition = "2021"
+description = "CabalMesh domain model: intents, money, identifiers. No I/O."
+publish = false
+
+[features]
+# Emits TypeScript for the domain types. Optional so the crate stays
+# dependency-light by default: the constraint that makes it testable in
+# milliseconds is that nothing heavy is mandatory.
+ts-rs = ["dep:ts-rs"]
+
+[dependencies]
+# Deliberately minimal. This crate must not gain tauri, tokio, reqwest
+# or libp2p — see the module docs in src/lib.rs for why that constraint is
+# load-bearing rather than stylistic.
+serde = { workspace = true }
+thiserror = { workspace = true }
+ts-rs = { version = "12", optional = true }
+
+[dev-dependencies]
+proptest = "1"
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

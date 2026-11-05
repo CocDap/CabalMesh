@@ -1,0 +1,10 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&GuardianStatus\n{ enrolled: true, guardian_count: 5, threshold: 3, holding_for: 0, })"
+---
+{
+  "enrolled": true,
+  "guardianCount": 5,
+  "threshold": 3,
+  "holdingFor": 0
+}

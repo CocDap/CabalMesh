@@ -1,0 +1,8 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&SecurityStatus { locked: false, passphrase_enabled: true })"
+---
+{
+  "locked": false,
+  "passphraseEnabled": true
+}

@@ -1,0 +1,64 @@
+[package]
+name = "cabal-ble-macos"
+version = "0.1.0"
+edition = "2021"
+description = "CoreBluetooth radio for the CabalMesh BLE plane: dual-role GATT rendezvous plus an L2CAP channel."
+publish = false
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSString",
+    "NSArray",
+    "NSDictionary",
+    "NSData",
+    "NSStream",
+    "NSObject",
+    "NSValue",
+    "NSError",
+] }
+objc2-core-bluetooth = { version = "0.3", default-features = false, features = [
+    "std",
+    "dispatch2",
+    "CBCentralManager",
+    "CBPeripheralManager",
+    "CBPeripheral",
+    "CBService",
+    "CBCharacteristic",
+    "CBAttribute",
+    "CBUUID",
+    "CBManager",
+    "CBPeer",
+    "CBL2CAPChannel",
+    "CBAdvertisementData",
+    "CBCentralManagerConstants",
+    "CBPeripheralManagerConstants",
+    "CBError",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "CFStream",
+    "CFBase",
+] }
+dispatch2 = "0.3"
+
+[dependencies]
+tracing = { workspace = true }
+# The identifiers every node must agree on live with the protocol, not with a
+# platform: a macOS radio and an Android radio that disagree are two meshes.
+cabal-ble = { path = "../cabal-ble" }
+
+# Deliberately NOT `workspace = true`.
+#
+# The workspace forbids unsafe, which is correct for every other crate here and
+# impossible for this one: CoreBluetooth is Objective-C, reached through raw
+# message sends. Isolating the unsafe in a crate that does nothing else is the
+# point — the protocol, the routing and the framing stay in `cabal-ble`, which
+# keeps the workspace's `forbid`.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }

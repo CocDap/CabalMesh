@@ -1,0 +1,36 @@
+[package]
+name = "cabal-relay"
+version = "0.1.0"
+edition = "2021"
+description = "The CabalMesh circuit relay: the only way two peers on different networks meet."
+publish = false
+
+[dependencies]
+# Pinned to the same versions the app uses, deliberately and not by accident.
+#
+# A relay running a different libp2p revision does not fail loudly — it fails
+# by refusing reservations, which looks like a network problem from the phone.
+# Keeping the relay in this workspace is what makes "the versions match" a
+# property of the lockfile rather than of somebody remembering.
+libp2p = { version = "0.54", features = [
+    "tokio",
+    "tcp",
+    "quic",
+    "dns",
+    "noise",
+    "yamux",
+    "identify",
+    "ping",
+    "relay",
+    "macros",
+] }
+libp2p-swarm = { version = "0.45", features = ["macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints]
+workspace = true

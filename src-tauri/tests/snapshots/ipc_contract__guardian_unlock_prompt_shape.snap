@@ -1,0 +1,8 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&GuardianUnlockPrompt { id: 42, from: \"4B12…9F00\".into() })"
+---
+{
+  "id": 42,
+  "from": "4B12…9F00"
+}

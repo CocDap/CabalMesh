@@ -1,0 +1,25 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&NearAccountView\n{\n    account_id:\n    \"b6336d522196d849252c5dbef77215710abf748ac53afc63ece79378d188b1ff\".into(),\n    network: \"NEAR Testnet\".into(), native_balance: Some(\"1.5\".into()),\n    tokens:\n    vec![NearTokenView\n    {\n        symbol: \"wNEAR\".into(), decimals: 24, wallet: Some(\"0\".into()),\n        in_intents: Some(\"40\".into()),\n    }, NearTokenView\n    { symbol: \"USDC\".into(), decimals: 6, wallet: None, in_intents: None },],\n    faucet_links: vec![\"https://near-faucet.io/\".into()], explorer_url:\n    \"https://testnet.nearblocks.io/address/b633\".into(),\n})"
+---
+{
+  "accountId": "b6336d522196d849252c5dbef77215710abf748ac53afc63ece79378d188b1ff",
+  "network": "NEAR Testnet",
+  "nativeBalance": "1.5",
+  "tokens": [
+    {
+      "symbol": "wNEAR",
+      "decimals": 24,
+      "wallet": "0",
+      "inIntents": "40"
+    },
+    {
+      "symbol": "USDC",
+      "decimals": 6
+    }
+  ],
+  "faucetLinks": [
+    "https://near-faucet.io/"
+  ],
+  "explorerUrl": "https://testnet.nearblocks.io/address/b633"
+}

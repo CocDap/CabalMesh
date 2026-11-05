@@ -1,0 +1,37 @@
+node_modules/
+dist/
+.env
+.env.local
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas
+
+# Gradle output for the mobile plugins.
+#
+# Tauri's own generated project (src-tauri/gen/android) ships .gitignore files
+# that cover its build directory. A hand-written plugin has none, so `git add`
+# on the plugin directory sweeps in every .class, .dex and Kotlin incremental
+# cache it produced — which is how tauri-plugin-cabal-ble came to have 163
+# build artefacts committed.
+src-tauri/tauri-plugin-*/android/build/
+
+# Desktop and mobile bundles. `dist/` was already ignored; these are the same
+# thing under different names.
+dist-desktop/
+dist-mobile/
+
+# Hardhat
+contracts/node_modules/
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+contracts/.env
+
+# OS
+.DS_Store
+.scratch/
+
+# NEAR Intents spike: testnet keys and run output
+scripts/near-intents-spike/.keys.json
+scripts/near-intents-spike/.run.json

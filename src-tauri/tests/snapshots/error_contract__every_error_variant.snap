@@ -1,0 +1,58 @@
+---
+source: tests/error_contract.rs
+expression: "rendered.join(\"\\n---\\n\")"
+---
+{
+  "kind": "not_ready",
+  "detail": {
+    "subsystem": "mesh"
+  }
+}
+---
+{
+  "kind": "unsupported",
+  "detail": {
+    "feature": "local_llm"
+  }
+}
+---
+{
+  "kind": "mesh_offline"
+}
+---
+{
+  "kind": "invalid_intent",
+  "detail": {
+    "field": "amount",
+    "reason": "too_precise"
+  }
+}
+---
+{
+  "kind": "chain",
+  "detail": {
+    "retryable": true
+  }
+}
+---
+{
+  "kind": "near_account_not_funded",
+  "detail": {
+    "account": "abc"
+  }
+}
+---
+{
+  "kind": "vault_locked"
+}
+---
+{
+  "kind": "too_many_subscriptions",
+  "detail": {
+    "limit": 16
+  }
+}
+---
+{
+  "kind": "internal"
+}

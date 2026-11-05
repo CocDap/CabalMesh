@@ -1,0 +1,59 @@
+/* CabalMesh borders, radii, glows, textures, motion. */
+:root{
+  /* radii - CabalMesh has NO rounded corners. Zero is a brand rule, not a default. */
+  --radius-none:0px;
+  --radius-base:0px;
+  --radius-appicon:22%; /* sole exception: OS-masked app icon */
+
+  /* borders */
+  --border-width:1px;
+  --border-width-thick:2px;
+  --border-hairline-style:var(--border-width) solid var(--border-hairline); /* @kind other */
+  --border-default-style:var(--border-width) solid var(--border-default); /* @kind other */
+  --border-strong-style:var(--border-width) solid var(--border-strong); /* @kind other */
+  --border-loud-style:var(--border-width) solid var(--border-loud); /* @kind other */
+
+  /* glows replace drop shadows - dark-on-dark makes shadows invisible */
+  --glow-none:none; /* @kind shadow */
+  --glow-blue:0 0 10px color-mix(in srgb,var(--accent-neon-blue) 38%,transparent);
+  --glow-green:0 0 10px color-mix(in srgb,var(--accent-acid-green) 38%,transparent);
+  --glow-red:0 0 10px color-mix(in srgb,var(--accent-blood-red) 38%,transparent);
+  --glow-white:0 0 14px color-mix(in srgb,var(--ink-white) 22%,transparent);
+  --glow-focus:0 0 0 1px var(--border-focus),0 0 12px color-mix(in srgb,var(--accent-neon-blue) 30%,transparent);
+
+  /* the only "shadow" in the system: a lift-off ring on modals */
+  --shadow-modal:0 0 0 1px var(--border-default),0 0 0 100vmax var(--surface-scrim);
+
+  /* textures - copied from PATTERN & TEXTURE in the brand book */
+  --texture-grid:linear-gradient(color-mix(in srgb,var(--ink-iron) 40%,transparent) var(--border-width),transparent var(--border-width)),linear-gradient(90deg,color-mix(in srgb,var(--ink-iron) 40%,transparent) var(--border-width),transparent var(--border-width)); /* @kind other */
+  --texture-grid-size:8px 8px;
+  --texture-grid-coarse-size:32px 32px;
+  --texture-scanlines:repeating-linear-gradient(180deg,color-mix(in srgb,var(--ink-white) 3%,transparent) 0 1px,transparent 1px 3px); /* @kind other */
+  --texture-vignette:radial-gradient(125% 95% at 50% 0%,transparent 28%,color-mix(in srgb,var(--ink-void) 88%,transparent) 100%); /* @kind other */
+  --panel-sheen:linear-gradient(180deg,color-mix(in srgb,var(--ink-white) 4%,transparent),transparent 45%); /* @kind other */
+  --texture-dither-url:url("../assets/textures/dither.png"); /* @kind other */
+  --texture-glitch-url:url("../assets/textures/glitch.png"); /* @kind other */
+
+  /* motion - stepped, mechanical, never bouncy */
+  --dur-instant:60ms; /* @kind other */
+  --dur-fast:120ms; /* @kind other */
+  --dur-base:200ms; /* @kind other */
+  --dur-slow:420ms; /* @kind other */
+  --dur-glacial:900ms; /* @kind other */
+  --ease-step:steps(6,end); /* @kind other */
+  --ease-step-coarse:steps(3,end); /* @kind other */
+  --ease-out:cubic-bezier(.16,.84,.44,1); /* @kind other */
+  --ease-in-out:cubic-bezier(.7,0,.3,1); /* @kind other */
+  --ease-linear:linear; /* @kind other */
+  --transition-base:var(--dur-fast) var(--ease-out); /* @kind other */
+
+  /* stacking */
+  --z-base:0; /* @kind other */
+  --z-raised:10; /* @kind other */
+  --z-sticky:100; /* @kind other */
+  --z-nav:200; /* @kind other */
+  --z-overlay:800; /* @kind other */
+  --z-modal:900; /* @kind other */
+  --z-toast:1000; /* @kind other */
+  --z-tooltip:1100; /* @kind other */
+}

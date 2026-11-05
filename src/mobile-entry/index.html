@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      viewport-fit=cover so the layout can reach under the notch and home
+      indicator, with env(safe-area-inset-*) reclaiming those regions.
+
+      Deliberately NO user-scalable=no and NO maximum-scale. An earlier plan
+      locked zoom to protect the fixed 390px layout; that removes the user's
+      last resort and fails WCAG 1.4.4. Accidental pinch on an instrument
+      layout is a far smaller cost than an unusable app.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>CabalMesh</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/mobile.tsx"></script>
+  </body>
+</html>

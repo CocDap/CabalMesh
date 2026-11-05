@@ -1,0 +1,171 @@
+/* Mobile adaptations to the design system.
+ *
+ * Everything here fixes something that breaks on a device. The vendored
+ * tokens/ and components/ trees are replaced wholesale when the design system
+ * is regenerated, so local changes live in this file and nowhere else.
+ */
+
+/* ---------------------------------------------------------------------------
+ * C5 — type scale
+ *
+ * The design system's sizes are fixed pixels starting at 9px. That ignores
+ * Dynamic Type and Android font scale entirely.
+ *
+ * --type-scale is set from the OS setting at boot and on resume. It is NOT
+ * clamped: WCAG 1.4.4 requires text to reach 200% without losing content or
+ * function, and an earlier revision capping this at 130% was a decision to
+ * fail that criterion rather than a resolution of it.
+ *
+ * The criterion does not forbid a 9px base — it forbids a layout that cannot
+ * grow. Growing is what the rest of this file is for.
+ * ------------------------------------------------------------------------ */
+:root {
+  --type-scale: 1;
+
+  --text-2xs: calc(9px * var(--type-scale));
+  --text-xs: calc(10px * var(--type-scale));
+  --text-sm: calc(11px * var(--type-scale));
+  --text-base: calc(13px * var(--type-scale));
+  --text-md: calc(15px * var(--type-scale));
+  --text-lg: calc(18px * var(--type-scale));
+  --text-xl: calc(24px * var(--type-scale));
+  --text-2xl: calc(32px * var(--type-scale));
+  --text-3xl: calc(44px * var(--type-scale));
+  --text-4xl: calc(64px * var(--type-scale));
+  --text-5xl: calc(88px * var(--type-scale));
+
+  /* Safe areas, resolved once so components use a plain variable.
+   *
+   * Two sources, because one platform is not enough. iOS reports the notch and
+   * the home indicator through `env(safe-area-inset-*)`. Android's WebView
+   * reports *only* a display cutout that way — the status bar and the gesture
+   * pill are window insets it never surfaces, so `safe-area-inset-bottom` is
+   * `0px` there and the tab bar renders underneath the gesture bar.
+   *
+   * MainActivity pushes the real Android insets in as `--android-inset-*`.
+   * `max()` takes whichever is larger, so each platform contributes what it
+   * knows and neither has to be special-cased downstream. The fallbacks keep
+   * this correct in a desktop browser, where neither source exists. */
+  --android-inset-top: 0px;
+  --android-inset-bottom: 0px;
+  --android-inset-left: 0px;
+  --android-inset-right: 0px;
+
+  --safe-top: max(env(safe-area-inset-top, 0px), var(--android-inset-top));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--android-inset-bottom));
+  --safe-left: max(env(safe-area-inset-left, 0px), var(--android-inset-left));
+  --safe-right: max(env(safe-area-inset-right, 0px), var(--android-inset-right));
+}
+
+/* ---------------------------------------------------------------------------
+ * C3 — hover
+ *
+ * The brand's signature interaction inverts a button on hover. There is no
+ * hover on a phone, and :hover *sticks* after a tap in a mobile webview,
+ * leaving buttons stuck white-on-black until something else is touched.
+ *
+ * Gated to real pointers. On touch the brand's own press state carries the
+ * whole feedback load, which it was already designed to do.
+ * ------------------------------------------------------------------------ */
+@media (hover: none), (pointer: coarse) {
+  *:hover {
+    /* Neutralise inherited hover styling rather than restyling per component:
+       the vendored tree sets hover inline in dozens of places. */
+    transition: none !important;
+  }
+}
+
+/* The OS tap flash is a colour the brand does not own, and it violates the
+   under-5% accent budget every time anything is touched. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Press state, per the brand: opacity only. No scale, no translate, no
+   shrink — the system has no springs and this must not introduce one. */
+@media (hover: none), (pointer: coarse) {
+  button:active,
+  [role='button']:active,
+  a:active {
+    opacity: 0.72;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * C4 — touch targets
+ *
+ * Controls are ~35px tall; iOS wants 44pt and Android 48dp. The visual size is
+ * brand-critical, so the *hit* area grows instead via a transparent
+ * pseudo-element. Nothing moves and nothing resizes.
+ *
+ * CAVEAT: two expanded areas that meet will steal each other's taps. Keep at
+ * least --space-6 (16px) between any two .cm-touch controls; where the layout
+ * cannot afford that, use real padding instead.
+ * ------------------------------------------------------------------------ */
+.cm-touch {
+  position: relative;
+}
+
+.cm-touch::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  /* Behind the control's own content so it extends the target without
+     covering anything interactive inside it. */
+  z-index: -1;
+}
+
+/* ---------------------------------------------------------------------------
+ * Scroll and viewport
+ * ------------------------------------------------------------------------ */
+html {
+  /* Explicit: iOS otherwise inflates text in ways that fight --type-scale. */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* The system is black-grounded by law; this makes form controls, scrollbars
+     and the keyboard follow rather than rendering light. */
+  color-scheme: dark;
+  /* Stop the whole page rubber-banding. Individual scroll containers keep
+     their own momentum. */
+  overscroll-behavior: none;
+}
+
+/* Anything that scrolls does so inside its own container, between the fixed
+   header and tab bar. */
+.cm-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---------------------------------------------------------------------------
+ * Reflow
+ *
+ * Every text-bearing box is sized by its content, never fixed. A fixed height
+ * clips descenders the moment --type-scale rises, which is precisely the
+ * failure the unclamped scale would otherwise cause.
+ * ------------------------------------------------------------------------ */
+.cm-row,
+.cm-header,
+.cm-tabbar {
+  min-block-size: var(--cm-min-height, auto);
+  block-size: auto;
+}
+
+/* ---------------------------------------------------------------------------
+ * Motion
+ *
+ * base.css already ships the keyframes and a prefers-reduced-motion block.
+ * This only guarantees the brand rule that nothing springs — a stray
+ * transition with an overshoot easing would be off-brand even if it looked
+ * fine.
+ * ------------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  .cm-pulse,
+  .cm-blink,
+  .cm-scan {
+    animation: none !important;
+  }
+}

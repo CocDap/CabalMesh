@@ -1,0 +1,126 @@
+name: cabalmesh
+options:
+  bundleIdPrefix: com.cabalmesh.app
+  deploymentTarget:
+    iOS: 14.0
+fileGroups: [../../src]
+configs:
+  debug: debug
+  release: release
+settingGroups:
+  app:
+    base:
+      PRODUCT_NAME: CabalMesh
+      PRODUCT_BUNDLE_IDENTIFIER: com.cabalmesh.app
+targetTemplates:
+  app:
+    type: application
+    sources:
+      - path: Sources
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      groups: [app]
+targets:
+  cabalmesh_iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Assets.xcassets
+      - path: Externals
+      - path: cabalmesh_iOS
+      - path: assets
+        buildPhase: resources
+        type: folder
+      - path: LaunchScreen.storyboard
+    info:
+      path: cabalmesh_iOS/Info.plist
+      properties:
+        LSRequiresIPhoneOS: true
+        UILaunchStoryboardName: LaunchScreen
+        UIRequiredDeviceCapabilities: [arm64, metal]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleShortVersionString: 0.1.0
+        CFBundleVersion: "0.1.0"
+        # Non-exempt: the app ships its own AES-256-GCM vault and Noise
+        # transport rather than calling only the OS. Reasoning, classification
+        # and the two filings this obliges are in docs/export-compliance.md.
+        # ITSEncryptionExportComplianceCode is deliberately absent — Apple
+        # issues it only once the export documentation is accepted.
+        ITSAppUsesNonExemptEncryption: true
+        # CoreBluetooth is linked below because the Apple BLE backend lives in
+        # the Rust static library. Keep the usage description in this source
+        # spec as well as src-tauri/Info.plist so XcodeGen cannot drop it.
+        NSBluetoothAlwaysUsageDescription: CabalMesh relays intents to nearby nodes over Bluetooth when there is no network. No identity is attached.
+        # libp2p mDNS sends raw UDP multicast to 224.0.0.251:5353. iOS gates
+        # both the local-network probe and the multicast socket itself.
+        NSLocalNetworkUsageDescription: CabalMesh discovers nearby nodes on your local network. No identity is attached.
+        NSBonjourServices:
+          - _p2p._udp
+          - _p2p._tcp
+        # Reaching an Ollama server on the same LAN over plain http. A remote
+        # Ollama on the public internet must use https, or this needs a
+        # matching NSExceptionDomains entry.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    entitlements:
+      path: cabalmesh_iOS/cabalmesh_iOS.entitlements
+      properties:
+        # libp2p mDNS peer discovery uses raw UDP multicast, which iOS 14+
+        # blocks without this. Apple grants it only via the Multicast Networking
+        # Entitlement request form; until it is approved for this bundle ID,
+        # signing a device build with it present will fail.
+        com.apple.developer.networking.multicast: true
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      base:
+        ENABLE_BITCODE: false
+        # Read from the environment, never written down. A team identifier in
+        # version control is a small thing that leaks an organisation and
+        # pins every contributor's build to one account.
+        #
+        # Xcode expands ${VAR} here from the process environment, so
+        # `export APPLE_DEVELOPMENT_TEAM=…` is the whole configuration. An
+        # unset variable yields an empty team, which fails at signing with a
+        # message naming it — a better failure than a stranger's team id.
+        DEVELOPMENT_TEAM: ${APPLE_DEVELOPMENT_TEAM}
+        ARCHS: [arm64]
+        VALID_ARCHS: arm64 
+        LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+      groups: [app]
+    dependencies:
+      - framework: libapp.a
+        embed: false
+      - sdk: CoreBluetooth.framework
+      - sdk: CoreGraphics.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: QuartzCore.framework
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: UIKit.framework
+      - sdk: WebKit.framework
+    preBuildScripts:
+      - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+        name: Build Rust Code
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
+          - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a

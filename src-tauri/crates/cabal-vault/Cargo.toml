@@ -1,0 +1,24 @@
+[package]
+name = "cabal-vault"
+version = "0.1.0"
+edition = "2021"
+description = "Encryption at rest for key material."
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+cabal-store = { path = "../cabal-store" }
+aes-gcm = "0.10.3"
+argon2 = "0.5"
+hex = "0.4"
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = "3"
+
+[lints]
+workspace = true

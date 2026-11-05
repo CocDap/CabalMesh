@@ -1,0 +1,16 @@
+[package]
+name = "cabal-intent-inference"
+version = "0.1.0"
+edition = "2021"
+description = "Private, deterministic intent-field inference for CabalMesh."
+publish = false
+
+[dependencies]
+cabal-core = { path = "../cabal-core" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

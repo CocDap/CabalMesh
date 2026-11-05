@@ -1,0 +1,24 @@
+# Pin a stable toolchain.
+#
+# The repo was previously building on whatever nightly happened to be the
+# rustup default. Nightly is an unnecessary variable in a build that has to
+# cross-compile to seven target triples; a moving compiler turns a mobile
+# link failure into a question about which thing changed.
+#
+# Targets listed here are installed automatically by rustup. iOS is complete;
+# the four Android triples are added by ticket 08 once the SDK/NDK exist.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+targets = [
+    "aarch64-apple-darwin",
+    # iOS: device, simulator on Apple silicon, simulator on Intel.
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "x86_64-apple-ios",
+    # Android: the four ABIs a Play bundle ships.
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "i686-linux-android",
+    "x86_64-linux-android",
+]

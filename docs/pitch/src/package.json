@@ -1,0 +1,19 @@
+{
+  "name": "cabalmesh-deck-src",
+  "private": true,
+  "type": "commonjs",
+  "description": "Generates docs/pitch/CabalMesh-Project-Plan.pptx",
+  "scripts": {
+    "build": "node build.js",
+    "icons": "node gen_icons2.js"
+  },
+  "dependencies": {
+    "pptxgenjs": "^4.0.1"
+  },
+  "devDependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-icons": "^5.5.0",
+    "sharp": "^0.34.4"
+  }
+}

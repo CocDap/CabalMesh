@@ -1,0 +1,186 @@
+# This manifest is both the workspace root and the Tauri app package. Tauri
+# expects its package at src-tauri/, so the workspace lives here rather than at
+# the repo root.
+#
+# Extracted crates go in crates/ and must not depend on this package — the
+# dependency arrow points inward, toward the domain.
+[workspace]
+members = ["crates/*"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+
+[package]
+name = "cabalmesh"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "cabalmesh_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+ts-rs = ["dep:ts-rs", "cabal-core/ts-rs"]
+
+[dependencies]
+# The domain model. No I/O, no runtime — see crates/cabal-core/src/lib.rs.
+cabal-core = { path = "crates/cabal-core" }
+cabal-near = { path = "crates/cabal-near" }
+cabal-store = { path = "crates/cabal-store" }
+cabal-vault = { path = "crates/cabal-vault" }
+# Shamir sharing over a vault key and sealed-box encryption to a guardian's
+# public key. No I/O — the BLE wiring and persistence live in src/guardian.rs.
+cabal-guardian = { path = "crates/cabal-guardian" }
+# The BLE mesh protocol: wire format, flood routing, sessions. No I/O — the
+# radio-shaped half lives in src/ble/, which is small on purpose.
+cabal-ble = { path = "crates/cabal-ble" }
+# The CoreBluetooth radio. Apple-only inside, and a stub elsewhere, so the app
+# compiles unchanged on every platform and refuses at runtime rather than at
+# link time.
+cabal-ble-macos = { path = "crates/cabal-ble-macos" }
+# The Android radio, as a Tauri mobile plugin: Kotlin behind a Rust handle.
+tauri-plugin-cabal-ble = { path = "tauri-plugin-cabal-ble" }
+# The Android Keystore, same shape and same reason: the API is Java.
+tauri-plugin-cabal-keystore = { path = "tauri-plugin-cabal-keystore" }
+
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Mesh Networking (libp2p)
+# QUIC alongside TCP: a phone changes networks constantly, and QUIC connection
+# migration survives a Wi-Fi to cellular handoff where a TCP socket does not.
+# identify/ping/relay/dcutr are what make off-LAN discovery possible at all —
+# mDNS alone is a room-sized mesh.
+libp2p = { version = "0.54", features = [
+    "tokio",
+    "tcp",
+    "quic",
+    "dns",
+    "noise",
+    "yamux",
+    "gossipsub",
+    "mdns",
+    "identify",
+    "ping",
+    "relay",
+    "dcutr",
+    "macros",
+] }
+libp2p-swarm = { version = "0.45", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client.
+#
+# rustls, not native-tls: Android ships no system OpenSSL, so a native-tls
+# build either fails to link or fails at runtime on device.
+#
+# NB: 0.13 renamed the rustls feature from `rustls-tls` to `rustls`.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2"] }
+
+# The resolver behind libp2p's DNS transport, pinned to the version libp2p-dns
+# 0.42 uses so the config types are the same ones its builder accepts.
+#
+# Direct because the swarm reads the system resolver itself: libp2p's
+# `with_dns()` treats a missing `/etc/resolv.conf` as fatal, which is every
+# Android device. See `resolver_settings` in src/mesh.rs.
+hickory-resolver = { version = "0.24", default-features = false, features = ["system-config"] }
+
+# Structured, span-aware diagnostics. Libraries emit through the facade only;
+# the app crate is the single place a subscriber is installed.
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+
+# Additional utilities
+futures = "0.3"
+async-trait = "0.1"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+rand = "0.9.2"
+aes-gcm = "0.10.3"
+base64 = "0.22.1"
+bs58 = "0.5"
+# The device-binding fingerprint is Keccak-256. See src/device_binding.rs.
+sha3 = "0.10"
+
+# Wipes key material from memory on drop, so a heap dump after the fact does
+# not still contain it.
+zeroize = "1"
+
+# Turns the user's passphrase into the key that wraps the vault key. Memory
+# hardness is the property being bought: an attacker holding a copy of the key
+# file pays 64 MiB per guess, which is what a GPU farm cannot make cheap.
+argon2 = "0.5"
+thiserror.workspace = true
+tokio-util = { version = "0.7.19", features = ["rt"] }
+ts-rs = { version = "12.0.1", optional = true }
+
+# Desktop-only. A mobile bundle has no .env file to read and no environment to
+# read it into, so this must never enter the mobile dependency graph.
+#
+# Cargo has no "target-conditional workspace member" or cfg(desktop)-gated
+# dependency — Tauri's cfg values are set by tauri-build, far too late to
+# influence resolution. Target-specific dependencies are the mechanism that
+# actually works.
+#
+# Lets a developer point desktop builds at another RPC or verifier. See
+# src/network_config.rs.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+dotenv = "0.15.0"
+
+# Apple's Security.framework, for the device-bound half of the vault key. Only
+# where it exists: every other platform reports honestly that it has no binding
+# rather than linking a stub that pretends to.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+security-framework = "3"
+
+# Apple platforms route to the unified log, so iOS output shows in Console.app
+# and macOS `log stream` — the only way to see anything from a device.
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+tracing-oslog = "0.3"
+
+# Android routes to logcat, the equivalent there.
+[target.'cfg(target_os = "android")'.dependencies]
+tracing-android = "0.2"
+
+# Android is the only platform where rustls has to be handed a trust store.
+#
+# Every rustls feature of reqwest 0.13 pulls in rustls-platform-verifier, and on
+# Android that crate reads the system trust store through the JVM. It panics on
+# first use until initialized, so these exist to perform that handshake — see
+# src/tls.rs. `jni` is pinned to 0.22 to match the verifier's; tauri is on 0.21
+# and the two are not interchangeable.
+rustls-platform-verifier = "0.7"
+jni = "0.22"
+ndk-context = "0.1"
+
+[dev-dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+cabal-store = { path = "crates/cabal-store" }
+tempfile = "3"
+cabal-core = { path = "crates/cabal-core" }
+insta = "1.48.0"
+tauri = { version = "2", features = ["test"] }

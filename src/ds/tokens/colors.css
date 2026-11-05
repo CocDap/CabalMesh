@@ -1,0 +1,57 @@
+/* CabalMesh colour system.
+   The palette is monochrome by law. Accents are rationed to under 5% of any surface. */
+:root{
+  /* --- mono ramp (the whole brand lives here) --- */
+  --ink-white:#FFFFFF;
+  --ink-silver:#BEBEBE;
+  --ink-steel:#7A7A7A;
+  --ink-iron:#3A3A3A;
+  --ink-pitch:#0F0F0F;
+  --ink-void:#000000;
+
+  /* numeric aliases for systematic use */
+  --mono-0:var(--ink-white);
+  --mono-1:var(--ink-silver);
+  --mono-2:var(--ink-steel);
+  --mono-3:var(--ink-iron);
+  --mono-4:var(--ink-pitch);
+  --mono-5:var(--ink-void);
+
+  /* --- accents: budget is 5% of pixels, never more --- */
+  --accent-neon-blue:#00E5FF;
+  --accent-blood-red:#FF3B3B;
+  --accent-acid-green:#9BFF00;
+
+  /* --- surfaces --- */
+  --surface-page:var(--ink-void);
+  --surface-panel:var(--ink-pitch);
+  --surface-raised:color-mix(in srgb,var(--ink-pitch) 84%,var(--ink-iron));
+  --surface-hover:color-mix(in srgb,var(--ink-pitch) 68%,var(--ink-iron));
+  --surface-active:color-mix(in srgb,var(--ink-pitch) 44%,var(--ink-iron));
+  --surface-inset:var(--ink-void);
+  --surface-inverse:var(--ink-white);
+  --surface-scrim:color-mix(in srgb,var(--ink-void) 86%,transparent);
+
+  /* --- text --- */
+  --text-primary:var(--ink-white);
+  --text-secondary:var(--ink-silver);
+  --text-muted:var(--ink-steel);
+  --text-disabled:var(--ink-iron);
+  --text-inverse:var(--ink-void);
+  --text-link:var(--ink-white);
+  --text-link-hover:var(--accent-neon-blue);
+
+  /* --- borders --- */
+  --border-hairline:color-mix(in srgb,var(--ink-iron) 55%,transparent);
+  --border-default:var(--ink-iron);
+  --border-strong:var(--ink-steel);
+  --border-loud:var(--ink-white);
+  --border-focus:var(--accent-neon-blue);
+
+  /* --- status: the only sanctioned use of colour --- */
+  --status-online:var(--accent-acid-green);
+  --status-alert:var(--accent-blood-red);
+  --status-info:var(--accent-neon-blue);
+  --status-idle:var(--ink-steel);
+  --status-offline:var(--ink-iron);
+}

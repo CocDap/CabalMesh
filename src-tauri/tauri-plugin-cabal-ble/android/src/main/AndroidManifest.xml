@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Declared by the plugin rather than by the app, so an app that adds the
+      plugin cannot forget them. A missing BLUETOOTH_SCAN does not fail to
+      build; it throws SecurityException the first time a scan starts, which
+      reads as "the radio is broken".
+    -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+
+    <!--
+      `neverForLocation` is what avoids dragging ACCESS_FINE_LOCATION in on
+      API 31+. Without it the app must ask for location to find a peer, which
+      is both a worse prompt and a worse claim for a product whose first
+      sentence is about not being identifiable.
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="true" />
+</manifest>

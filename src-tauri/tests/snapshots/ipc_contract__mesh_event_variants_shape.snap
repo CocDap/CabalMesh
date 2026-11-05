@@ -1,0 +1,40 @@
+---
+source: tests/ipc_contract.rs
+expression: shape(&events)
+---
+[
+  {
+    "type": "ListeningStarted",
+    "address": "/ip4/127.0.0.1/tcp/61854"
+  },
+  {
+    "type": "PeerDiscovered",
+    "peer_id": "12D3KooWJLUV",
+    "address": "/ip4/192.168.1.118/tcp/60744"
+  },
+  {
+    "type": "IntentReceived",
+    "intent": {
+      "id": "intent-1",
+      "intent_type": "trade",
+      "payload": "{}",
+      "encrypted": false,
+      "relay_path": [
+        "origin_node"
+      ],
+      "relay_fee": null
+    }
+  },
+  {
+    "type": "DealAccepted",
+    "details": "deal 3 accepted"
+  },
+  {
+    "type": "SettlementComplete",
+    "details": "settled in 11.4s"
+  },
+  {
+    "type": "SignedDiff",
+    "details": "one side signed"
+  }
+]

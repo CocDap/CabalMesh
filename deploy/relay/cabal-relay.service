@@ -1,0 +1,60 @@
+[Unit]
+Description=CabalMesh circuit relay
+Documentation=https://github.com/cocdap/Cabal-Mesh/blob/main/docs/relay-operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cabal-relay
+Group=cabal-relay
+
+ExecStart=/usr/local/bin/cabal-relay --key /etc/cabal-relay/relay.key
+Restart=on-failure
+RestartSec=5s
+
+# Log at info. The relay's info lines are the operational signal — reservations
+# accepted, reservations denied at limit — and debug adds a line per identify
+# exchange, which on a busy relay is most of the journal.
+Environment=RUST_LOG=info
+
+# The relay holds one connection per reservation, and the default 1024 is below
+# the configured maximum of 512 reservations once QUIC and TCP are both counted.
+LimitNOFILE=8192
+
+# --- Hardening -------------------------------------------------------------
+#
+# This process is reachable from the public internet by design and handles
+# untrusted input from every peer that dials it. It needs a network socket, its
+# key file, and nothing else.
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# The key directory is the only path it may read, and it may not write anywhere.
+# A relay that cannot write cannot be made to persist anything an attacker sends.
+ReadOnlyPaths=/etc/cabal-relay
+
+RestrictAddressFamilies=AF_INET AF_INET6
+IPAddressAllow=any
+
+[Install]
+WantedBy=multi-user.target

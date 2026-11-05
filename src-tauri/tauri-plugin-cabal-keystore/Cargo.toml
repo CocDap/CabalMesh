@@ -1,0 +1,20 @@
+[package]
+name = "tauri-plugin-cabal-keystore"
+version = "0.1.0"
+edition = "2021"
+description = "The Android Keystore half of the CabalMesh vault key."
+publish = false
+links = "tauri-plugin-cabal-keystore"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[lints]
+workspace = true

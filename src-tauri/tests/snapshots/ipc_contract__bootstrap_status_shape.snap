@@ -1,0 +1,9 @@
+---
+source: tests/ipc_contract.rs
+expression: shape(&value)
+---
+{
+  "message": "Booting Libp2p Swarm...",
+  "phase": "PHASE_2_NETWORK",
+  "progress": 70
+}

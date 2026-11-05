@@ -1,0 +1,14 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&PrivacyIntent\n{\n    id: \"intent-1\".into(), intent_type: \"trade\".into(), payload:\n    \"{\\\"action\\\":\\\"buy\\\"}\".into(), encrypted: true, relay_path:\n    vec![\"origin_node\".into()], relay_fee: None,\n})"
+---
+{
+  "id": "intent-1",
+  "intent_type": "trade",
+  "payload": "{\"action\":\"buy\"}",
+  "encrypted": true,
+  "relay_path": [
+    "origin_node"
+  ],
+  "relay_fee": null
+}

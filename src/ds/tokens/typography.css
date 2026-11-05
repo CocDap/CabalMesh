@@ -1,0 +1,60 @@
+/* CabalMesh typography. Two faces, both fixed-pitch in spirit.
+   Display = bitmap pixel face, uppercase only. Body = IBM Plex Mono. */
+:root{
+  --font-display:"Silkscreen","Pixel Operator",ui-monospace,monospace;
+  --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --font-body:var(--font-mono);
+
+  /* size scale - dense, technical, small */
+  --text-2xs:9px;
+  --text-xs:10px;
+  --text-sm:11px;
+  --text-base:13px;
+  --text-md:15px;
+  --text-lg:18px;
+  --text-xl:24px;
+  --text-2xl:32px;
+  --text-3xl:44px;
+  --text-4xl:64px;
+  --text-5xl:88px;
+
+  /* weights */
+  --weight-light:300; /* @kind other */
+  --weight-regular:400; /* @kind other */
+  --weight-medium:500; /* @kind other */
+  --weight-bold:700; /* @kind other */
+
+  /* tracking - the single most brand-defining type property */
+  --tracking-tight:0em; /* @kind other */
+  --tracking-normal:0.02em; /* @kind other */
+  --tracking-wide:0.08em; /* @kind other */
+  --tracking-wider:0.16em; /* @kind other */
+  --tracking-widest:0.32em; /* @kind other */
+  --tracking-wordmark:0.42em; /* @kind other */
+
+  /* leading */
+  --leading-none:1; /* @kind other */
+  --leading-tight:1.15; /* @kind other */
+  --leading-snug:1.35; /* @kind other */
+  --leading-normal:1.6; /* @kind other */
+  --leading-loose:1.9; /* @kind other */
+
+  /* semantic roles */
+  --type-wordmark-family:var(--font-display);
+  --type-wordmark-tracking:var(--tracking-wordmark); /* @kind other */
+  --type-display-family:var(--font-display);
+  --type-display-tracking:var(--tracking-wide); /* @kind other */
+  --type-display-leading:var(--leading-tight); /* @kind other */
+  --type-heading-family:var(--font-display);
+  --type-heading-tracking:var(--tracking-wider); /* @kind other */
+  --type-label-family:var(--font-mono);
+  --type-label-size:var(--text-xs);
+  --type-label-tracking:var(--tracking-widest); /* @kind other */
+  --type-label-weight:var(--weight-medium); /* @kind other */
+  --type-body-family:var(--font-mono);
+  --type-body-size:var(--text-base);
+  --type-body-leading:var(--leading-normal); /* @kind other */
+  --type-body-tracking:var(--tracking-normal); /* @kind other */
+  --type-data-family:var(--font-mono);
+  --type-data-tracking:var(--tracking-wide); /* @kind other */
+}

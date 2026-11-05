@@ -1,0 +1,13 @@
+{
+  "secret_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "signer_id": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+  "receiver_id": "usdc.tidepool-sandbox.testnet",
+  "nonce": 7,
+  "block_hash": "HjLq1b8YYsVzjd4rZYBTPMPYGiTBZNESAsFBAWbiXePK",
+  "method_name": "ft_transfer_call",
+  "args_json": "{\"receiver_id\":\"verifier.tidepool-sandbox.testnet\",\"amount\":\"1000000\",\"msg\":\"\"}",
+  "gas": "100000000000000",
+  "deposit": "1",
+  "expected_tx_hash": "6c8uCTqEZ2pckmc9kg1SAyWukebPaU5BNbyUGmF5FstD",
+  "expected_signed_tx_base64": "QAAAADc5YjU1NjJlOGZlNjU0Zjk0MDc4YjExMmU4YTk4YmE3OTAxZjg1M2FlNjk1YmVkN2UwZTM5MTBiYWQwNDk2NjQAebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQHAAAAAAAAAB0AAAB1c2RjLnRpZGVwb29sLXNhbmRib3gudGVzdG5ldPiTzdsOSGRoQpHTCBKf0yL8nlPd4y0wxbtcrmssVryCAQAAAAIQAAAAZnRfdHJhbnNmZXJfY2FsbE8AAAB7InJlY2VpdmVyX2lkIjoidmVyaWZpZXIudGlkZXBvb2wtc2FuZGJveC50ZXN0bmV0IiwiYW1vdW50IjoiMTAwMDAwMCIsIm1zZyI6IiJ9AEB6EPNaAAABAAAAAAAAAAAAAAAAAAAAAHC/viGhH1H/J/kHAv2IjxqWzKIb7HSmkYyj0T4A/g9p3Ijm71c2ZEvdHpUNQGS/1Wk3+kpnOGqlOkHU7ctoYwM="
+}
