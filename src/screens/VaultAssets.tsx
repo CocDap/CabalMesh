@@ -204,11 +204,17 @@ function TransferPanel({ mode, account, onBack, onAccount }: {
           </div>
           <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="vault-transfer-form" aria-busy={busy}>
             <Field label="TOKEN" htmlFor="vault-transfer-token">
-              <select id="vault-transfer-token" className="vault-token-select" value={symbol} disabled={busy} onChange={(event) => { setSymbol(event.target.value); setAmount(""); setError(null); }}>
+              <select id="vault-transfer-token" className="vault-token-select" value={symbol} disabled={busy} onChange={(event) => {
+                setSymbol(event.target.value);
+                setAmount("");
+                setError(null);
+                setSuccess(null);
+                setSyncError(false);
+              }}>
                 {account.tokens.map((token) => <option key={token.symbol} value={token.symbol}>{token.symbol} · {tokenName(token.symbol)}</option>)}
               </select>
             </Field>
-            <div className="vault-available"><span>Available in {source}</span><span>{available ?? "Not yet read"}{available != null ? ` ${symbol}` : ""}</span></div>
+            <div className="vault-available" aria-live="polite"><span>{source} balance</span><span>{available ?? "Not yet read"}{available != null ? ` ${symbol}` : ""}</span></div>
             <Field label={`AMOUNT (${symbol})`} htmlFor="vault-transfer-amount">
               <Input id="vault-transfer-amount" type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={amount} disabled={busy} invalid={!!validation} aria-describedby={validation || error ? "vault-transfer-error" : undefined} onChange={(event) => { setAmount((event.target as HTMLInputElement).value); setError(null); }} />
             </Field>
