@@ -69,6 +69,8 @@ pub struct Services {
     pub ollama: Arc<OllamaManager>,
     /// One budget, so every model call on this device counts against it.
     pub llm_budget: Arc<crate::llm_budget::LlmBudget>,
+    pub agents: Arc<crate::negotiation::Agents>,
+    pub price_feed: Arc<crate::price_feed::PriceFeed>,
     pub identity: Arc<Mutex<IdentityStore>>,
     /// One client, so every NEAR call shares its connection pool.
     pub http: reqwest::Client,

@@ -489,7 +489,7 @@ pub fn classify_settlement(intent: &PrivacyIntent) -> Option<MeshEvent> {
     let details = intent.payload.clone();
     match message.get("type").and_then(serde_json::Value::as_str)? {
         "SettlementComplete" => Some(MeshEvent::SettlementComplete { details }),
-        "DealAccepted" => Some(MeshEvent::DealAccepted { details }),
+        "Invite" | "Offer" | "Counter" | "Accept" => Some(MeshEvent::Negotiation { details }),
         "SignedDiff" => Some(MeshEvent::SignedDiff { details }),
         _ => None,
     }
@@ -501,7 +501,8 @@ pub enum MeshEvent {
     ListeningStarted { address: String },
     PeerDiscovered { peer_id: String, address: String },
     IntentReceived { intent: PrivacyIntent },
-    DealAccepted { details: String },
+    /// A step of a price negotiation. See `negotiation`.
+    Negotiation { details: String },
     SettlementComplete { details: String },
     /// One side of a deal, signed. See `near_settlement`.
     SignedDiff { details: String },
@@ -530,10 +531,12 @@ mod settlement_tests {
 
     #[test]
     fn each_settlement_message_has_its_event() {
-        assert!(matches!(
-            classify_settlement(&settlement(r#"{"type":"DealAccepted"}"#)),
-            Some(MeshEvent::DealAccepted { .. })
-        ));
+        for kind in ["Invite", "Offer", "Counter", "Accept"] {
+            assert!(matches!(
+                classify_settlement(&settlement(&format!(r#"{{"type":"{kind}"}}"#))),
+                Some(MeshEvent::Negotiation { .. })
+            ));
+        }
         assert!(matches!(
             classify_settlement(&settlement(r#"{"type":"SignedDiff"}"#)),
             Some(MeshEvent::SignedDiff { .. })
@@ -557,6 +560,7 @@ mod settlement_tests {
     #[test]
     fn anything_else_is_not_a_settlement_event() {
         assert!(classify_settlement(&settlement(r#"{"type":"relay_tx"}"#)).is_none());
+        assert!(classify_settlement(&settlement(r#"{"type":"DealAccepted"}"#)).is_none(), "that skipped the rules");
         assert!(classify_settlement(&settlement("not json")).is_none());
         let mut intent = settlement(r#"{"type":"SignedDiff"}"#);
         intent.intent_type = "intent".into();

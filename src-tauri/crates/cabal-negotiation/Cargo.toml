@@ -1,0 +1,16 @@
+[package]
+name = "cabal-negotiation"
+version = "0.1.0"
+edition = "2021"
+description = "The rules of a price negotiation between two CabalMesh agents. No I/O."
+publish = false
+
+[dependencies]
+cabal-core = { path = "../cabal-core" }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

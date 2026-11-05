@@ -47,6 +47,7 @@ ts-rs = ["dep:ts-rs", "cabal-core/ts-rs"]
 # The domain model. No I/O, no runtime — see crates/cabal-core/src/lib.rs.
 cabal-core = { path = "crates/cabal-core" }
 cabal-near = { path = "crates/cabal-near" }
+cabal-negotiation = { path = "crates/cabal-negotiation" }
 cabal-store = { path = "crates/cabal-store" }
 cabal-vault = { path = "crates/cabal-vault" }
 # Shamir sharing over a vault key and sealed-box encryption to a guardian's

@@ -2,6 +2,9 @@ mod app_initializer;
 mod app_paths;
 mod platform;
 mod ollama_manager;
+pub mod agent;
+pub mod agent_tools;
+pub mod price_feed;
 mod negotiation;
 
 // Public because their types *are* the IPC contract: everything below
@@ -153,6 +156,20 @@ pub fn run() {
                 // Held pairs and unconfirmed reports wait on the chain, not on any
                 // mesh event, so something has to keep asking. Does nothing while
                 // there is nothing held.
+                let agents = Arc::new(negotiation::Agents::default());
+                let price_feed = Arc::new(price_feed::PriceFeed::open(
+                    network_config::NetworkConfig::current().near().price_feed,
+                    http.clone(),
+                    cabal_store::JsonStore::new(app_paths::in_data_dir("near_prices.json")),
+                ));
+                let tick_state = state.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(negotiation::TICK_INTERVAL).await;
+                        negotiation::tick(&tick_state);
+                    }
+                });
+
                 let retry_state = state.clone();
                 tokio::spawn(async move {
                     loop {
@@ -265,12 +282,9 @@ pub fn run() {
                                     // is idempotent, so no dedup is needed.
                                     let settlement = mesh::classify_settlement(&intent);
                                     if let Some(event) = &settlement {
-                                        intents::apply_mesh_event(
-                                            intent_bridge_state.intents(),
-                                            intent_bridge_state.received(),
-                                            event,
-                                        );
+                                        intents::apply_mesh_event(intent_bridge_state.received(), event);
                                         near_settlement::dispatch(&intent_bridge_state, event);
+                                        negotiation::dispatch(&intent_bridge_state, event);
                                         let _ = intent_bridge_app.emit("mesh-event", event);
                                     }
                                     // Counted on arrival, ahead of the
@@ -344,7 +358,6 @@ pub fn run() {
                         // happens, and a five-second poll would show a bid
                         // arriving five seconds after the peer sent it.
                         let handle_clone = app_handle.clone();
-                        let ledger = state.intents().clone();
                         let received = state.received().clone();
                         let state_for_events = state.clone();
                         let ble_for_events = ble.clone();
@@ -363,8 +376,9 @@ pub fn run() {
                                         });
                                     }
                                 }
-                                intents::apply_mesh_event(&ledger, &received, &event);
+                                intents::apply_mesh_event(&received, &event);
                                 near_settlement::dispatch(&state_for_events, &event);
+                                negotiation::dispatch(&state_for_events, &event);
                                 // A device with no IP-plane connectivity has
                                 // nothing to offer a BLE peer asking for a
                                 // gateway; one that just regained it does.
@@ -401,6 +415,8 @@ pub fn run() {
                             ble_transport: ble_transport.clone(),
                             ollama: ollama_state,
                             llm_budget,
+                            agents,
+                            price_feed,
                             identity,
                             http,
                             guardian: guardian_service.clone(),
@@ -426,6 +442,8 @@ pub fn run() {
                             ble_transport,
                             ollama: ollama_state,
                             llm_budget,
+                            agents,
+                            price_feed,
                             identity,
                             http,
                             guardian: guardian_service,

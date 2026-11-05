@@ -58,12 +58,9 @@ pub struct ReportedTx {
 pub struct Deal {
     pub id: String,
     pub price: UsdPrice,
-    /// The intent the winning proposal was addressed to.
-    ///
-    /// Both devices may propose, and a model need not give both the same price.
-    /// Each side signs alone, so they settle on one rule: the proposal addressed
-    /// to the lexicographically smaller intent id wins. If one side signed before
-    /// hearing the other, the verifier refuses the pair and no funds move.
+    /// The other intent. Both sides reach a deal with the same price through
+    /// `negotiation`, so this no longer decides anything, but ledgers already on disk
+    /// carry it.
     pub proposal_target: String,
     /// Set at signing. A signature cannot be recalled, so until this passes the
     /// other side or any gateway can still settle it.
@@ -98,9 +95,9 @@ pub struct Intent {
     pub log: Vec<LogLine>,
     #[serde(default)]
     pub deal: Option<Deal>,
-    /// The other side's NEAR account, for display. Learned from the mesh and,
-    /// once it signs, from its signature. A `token_diff` names no counterparty,
-    /// so settling does not depend on this.
+    /// The other side's NEAR account, for display. Learned from its signature, the
+    /// only trustworthy source. A `token_diff` names no counterparty, so settling
+    /// does not depend on this.
     pub counterparty: Option<String>,
 }
 
@@ -403,29 +400,6 @@ impl Ledger {
     }
 }
 
-/// What a peer sends when it accepts an intent.
-///
-/// Defined here because this is the only implementation of the acceptance
-/// message, and the fields it needs have to be named somewhere. A payload
-/// missing any of them moves nothing — which is the correct outcome, since
-/// an amount or price no one can check is not an agreement.
-#[derive(Debug, Clone, Deserialize)]
-struct Acceptance {
-    /// The intent this proposal is addressed to.
-    #[serde(rename = "intentId")]
-    intent_id: String,
-    /// The proposer's own intent, which together with `intent_id` names the deal.
-    #[serde(rename = "ownIntentId")]
-    own_intent_id: String,
-    chain: cabal_core::Chain,
-    /// The proposer's NEAR account.
-    address: String,
-    /// The price it proposes, as a decimal string.
-    price: String,
-    /// The raw amount it is trading. Must equal this intent's.
-    amount: String,
-}
-
 /// Intents this device has seen from other peers — over the IP mesh directly,
 /// or bridged in from BLE. The mirror of [`Ledger`]: that tracks what this
 /// device composed, this tracks the opposite direction, so a device that only
@@ -481,75 +455,14 @@ impl ReceivedLog {
     }
 }
 
-/// Applies a mesh event to the ledger.
+/// Counts a sighting of another peer's intent.
 ///
-/// Called on the forwarding path so negotiation reaches the detail screen as it
-/// happens. Polling for it would show a bid arriving up to a poll interval
-/// after the peer sent it, which on a screen with an elapsed timer beside it is
-/// visibly wrong.
-///
-/// Also the only place [`MeshEvent::IntentReceived`](crate::mesh::MeshEvent::IntentReceived)
-/// goes — it carries no ledger entry of its own to update, only a sighting for
-/// `received` to count.
-///
-/// Unrecognised events and unparseable payloads are ignored rather than logged
-/// as errors: this topic carries traffic for the whole mesh, and most of it is
-/// legitimately not about any intent this device composed.
-pub fn apply_mesh_event(ledger: &Ledger, received: &ReceivedLog, event: &crate::mesh::MeshEvent) {
+/// Unrecognised events are ignored rather than logged as errors: this topic carries
+/// traffic for the whole mesh, and most of it is not about any intent this device composed.
+pub fn apply_mesh_event(received: &ReceivedLog, event: &crate::mesh::MeshEvent) {
     if let crate::mesh::MeshEvent::IntentReceived { intent } = event {
         received.record(&intent.id);
-        return;
     }
-
-    let crate::mesh::MeshEvent::DealAccepted { details } = event else {
-        return;
-    };
-
-    let Ok(acceptance) = serde_json::from_str::<Acceptance>(details) else {
-        return;
-    };
-
-    let id = IntentId::new(acceptance.intent_id.clone());
-    let Some(intent) = ledger.get(&id) else {
-        // Somebody else's intent. Every peer sees every acceptance on the
-        // topic, so this is the common case rather than an anomaly.
-        return;
-    };
-    if !intent.status.is_active() || !intent.draft.chain.matches(acceptance.chain) {
-        return;
-    }
-    // A peer's proposal binds nothing it did not get checked against: the same
-    // size, and a price inside what the user asked for.
-    if acceptance.amount != intent.draft.amount.raw().to_string() {
-        return;
-    }
-    let Ok(price) = cabal_core::UsdPrice::parse(&acceptance.price) else {
-        return;
-    };
-    if !crate::negotiation::price_acceptable(&intent.draft, price) {
-        return;
-    }
-    let deal_id = crate::near_settlement::deal_id(&acceptance.intent_id, &acceptance.own_intent_id);
-    if ledger.propose_deal(&id, &deal_id, price, &acceptance.intent_id) == DealChange::Ignored {
-        return;
-    }
-
-    ledger.set_counterparty(&id, acceptance.address.clone());
-    ledger.record(
-        &id,
-        line(
-            format!("NODE {} ACCEPTED.", NodeId::new(acceptance.address).truncated()),
-            LogTone::Ok,
-        ),
-    );
-
-    // Bids accumulate rather than reset: the count is how many peers have
-    // answered, and recomputing it from one message would make it always 1.
-    let bids = match intent.status {
-        IntentStatus::Negotiating { bids, .. } => bids.saturating_add(1),
-        _ => 1,
-    };
-    let _ = ledger.advance(&id, IntentStatus::Negotiating { bids, best: Some(price) }, now_ms());
 }
 
 /// Wall-clock milliseconds.
@@ -813,64 +726,6 @@ mod tests {
         ledger.mark_signed(&intent.id, 9_000);
         assert_eq!(ledger.propose_deal(&intent.id, "a:b", price(420), "a"), DealChange::Ignored);
         assert_eq!(ledger.get(&intent.id).unwrap().deal.unwrap().price, price(400));
-    }
-
-    fn acceptance(intent: &Intent, price: &str, amount: u128) -> crate::mesh::MeshEvent {
-        crate::mesh::MeshEvent::DealAccepted {
-            details: serde_json::json!({
-                "type": "DealAccepted",
-                "intentId": intent.id.to_string(),
-                "ownIntentId": "peer-intent",
-                "chain": "near-testnet",
-                "address": "abc",
-                "price": price,
-                "amount": amount.to_string(),
-            })
-            .to_string(),
-        }
-    }
-
-    fn broadcast_buy() -> (Ledger, ReceivedLog, Intent, tempfile::TempDir) {
-        let (ledger, dir) = ledger();
-        let received = ReceivedLog::open(cabal_store::JsonStore::new(dir.path().join("received.json")));
-        let intent = ledger.create(draft(), 1_000);
-        ledger.advance(&intent.id, IntentStatus::Broadcast { route_len: 1 }, 1_000).unwrap();
-        (ledger, received, intent, dir)
-    }
-
-    #[test]
-    fn a_valid_proposal_forms_a_deal() {
-        let (ledger, received, intent, _dir) = broadcast_buy();
-        apply_mesh_event(&ledger, &received, &acceptance(&intent, "94.00", intent.draft.amount.raw()));
-
-        let after = ledger.get(&intent.id).unwrap();
-        let deal = after.deal.unwrap();
-        assert_eq!(deal.price, UsdPrice::from_cents(9400));
-        assert_eq!(deal.id, crate::near_settlement::deal_id(&intent.id.to_string(), "peer-intent"));
-        assert!(matches!(after.status, IntentStatus::Negotiating { bids: 1, .. }));
-    }
-
-    #[test]
-    fn a_resent_proposal_is_not_a_second_bid() {
-        let (ledger, received, intent, _dir) = broadcast_buy();
-        let event = acceptance(&intent, "94.00", intent.draft.amount.raw());
-        apply_mesh_event(&ledger, &received, &event);
-        apply_mesh_event(&ledger, &received, &event);
-        assert!(matches!(ledger.get(&intent.id).unwrap().status, IntentStatus::Negotiating { bids: 1, .. }));
-    }
-
-    #[test]
-    fn a_price_past_the_users_bound_forms_no_deal() {
-        let (ledger, received, intent, _dir) = broadcast_buy();
-        apply_mesh_event(&ledger, &received, &acceptance(&intent, "96.00", intent.draft.amount.raw()));
-        assert!(ledger.get(&intent.id).unwrap().deal.is_none());
-    }
-
-    #[test]
-    fn a_different_size_forms_no_deal() {
-        let (ledger, received, intent, _dir) = broadcast_buy();
-        apply_mesh_event(&ledger, &received, &acceptance(&intent, "94.00", 1));
-        assert!(ledger.get(&intent.id).unwrap().deal.is_none());
     }
 
     #[test]

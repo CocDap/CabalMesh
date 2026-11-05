@@ -58,6 +58,17 @@ impl Message {
         Self { role: Role::User, content: Some(content.to_string()), tool_calls: Vec::new(), tool_call_id: None }
     }
 
+    /// The result of a tool the model called.
+    #[must_use]
+    pub fn tool(call_id: &str, content: &str) -> Self {
+        Self {
+            role: Role::Tool,
+            content: Some(content.to_string()),
+            tool_calls: Vec::new(),
+            tool_call_id: Some(call_id.to_string()),
+        }
+    }
+
     fn to_wire(&self) -> Value {
         let mut wire = json!({ "role": self.role, "content": self.content });
         if !self.tool_calls.is_empty() {
@@ -137,6 +148,12 @@ impl LlmClient {
     #[must_use]
     pub fn new(settings: LlmSettings, key: Option<Secret>, http: reqwest::Client, budget: Arc<LlmBudget>) -> Self {
         Self { settings, key, http, budget }
+    }
+
+    /// What the last connection test found. `None` if none has run for these settings.
+    #[must_use]
+    pub const fn tools_supported(&self) -> Option<bool> {
+        self.settings.tools_supported
     }
 
     /// One model turn.
@@ -364,6 +381,36 @@ pub(crate) mod mock {
                 .collect()
         });
         (format!("http://{address}/v1"), handle)
+    }
+
+    /// Answers every request with `body`, and counts them. Runs until the process ends.
+    pub fn serve_forever(body: String) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = count.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                while !is_complete(&request) {
+                    let Ok(read) = stream.read(&mut buffer) else { break };
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let response = format!(
+                    "HTTP/1.1 200 X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{address}/v1"), count)
     }
 
     fn is_complete(request: &[u8]) -> bool {

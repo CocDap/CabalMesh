@@ -261,9 +261,44 @@ pub struct IntentDraft {
     pub privacy: PrivacyLevel,
 }
 
+/// What an intent tells the mesh. Has no price: the user's limit stays on the device,
+/// or a counterparty's agent would simply offer exactly that.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicIntent {
+    pub id: String,
+    pub chain: Chain,
+    pub asset: Box<str>,
+    /// Only `Buy` or `Sell` ever trade with another intent.
+    pub action: Action,
+    pub amount: TokenAmount,
+}
+
+impl PublicIntent {
+    #[must_use]
+    pub fn of(id: String, draft: &IntentDraft) -> Self {
+        Self { id, chain: draft.chain, asset: draft.asset.clone(), action: draft.action, amount: draft.amount }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_intent_has_no_price_field() {
+        let draft = IntentDraft {
+            chain: Chain::NearTestnet,
+            action: Action::Sell,
+            asset: "wNEAR".into(),
+            condition: Condition::Above { price: UsdPrice::from_cents(39_017) },
+            amount: TokenAmount::parse("1", 24).unwrap(),
+            mode: ExecutionMode::Shark,
+            privacy: PrivacyLevel::Low,
+        };
+        let wire = serde_json::to_string(&PublicIntent::of("a".into(), &draft)).unwrap();
+        assert!(!wire.contains("condition"), "{wire}");
+        assert!(!wire.contains("39017"), "{wire}");
+    }
 
     #[test]
     fn a_24_decimal_amount_survives_the_wire() {

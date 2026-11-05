@@ -35,6 +35,28 @@ pub async fn unsubscribe(id: String, state: State<'_, AppState>) -> Result<(), A
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_broadcast_payload_has_no_limit() {
+        let draft = cabal_core::IntentDraft {
+            chain: cabal_core::Chain::NearTestnet,
+            action: cabal_core::Action::Sell,
+            asset: "wNEAR".into(),
+            condition: cabal_core::Condition::Above { price: cabal_core::UsdPrice::from_cents(391) },
+            amount: cabal_core::TokenAmount::parse("1", 24).unwrap(),
+            mode: cabal_core::ExecutionMode::Shark,
+            privacy: cabal_core::PrivacyLevel::Low,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = crate::intents::Ledger::open(cabal_store::JsonStore::new(dir.path().join("i.json")));
+        let intent = ledger.create(draft, 1);
+
+        let payload = public_payload(&intent).unwrap();
+
+        assert!(!payload.contains("391"), "{payload}");
+        assert!(!payload.contains("3.91"), "{payload}");
+        assert!(!payload.contains("condition"), "{payload}");
+    }
+
     use super::*;
 
     #[tokio::test]
@@ -683,7 +705,7 @@ fn asset_option(spec: &crate::network_config::AssetSpec, balances: &crate::balan
 
 /// The cached balances of this device's account on the current network. Empty
 /// while the vault is locked, or if they have never been read.
-async fn cached_balances(state: &AppState) -> crate::balances::Balances {
+pub(crate) async fn cached_balances(state: &AppState) -> crate::balances::Balances {
     let Ok(services) = state.services() else {
         return crate::balances::Balances::default();
     };
@@ -1247,13 +1269,17 @@ enum PublishRoute {
 ///
 /// The error is the on-voice line to record, not a message to show raw —
 /// every path through here ends up in the terminal the user is reading.
+/// What the mesh learns about an intent. Not the draft: the user's price limit stays here.
+fn public_payload(intent: &crate::intents::Intent) -> Option<String> {
+    serde_json::to_string(&cabal_core::PublicIntent::of(intent.id.to_string(), &intent.draft)).ok()
+}
+
 async fn publish(state: &AppState, intent: &crate::intents::Intent) -> Result<PublishRoute, &'static str> {
     let services = state.services().map_err(|_| "MESH NOT READY. QUEUED LOCALLY.")?;
 
-    // The payload is the draft, serialized. Encryption is the transport's job:
-    // Noise already covers every hop, and a second layer here would be
-    // ceremony rather than protection.
-    let payload = serde_json::to_string(&intent.draft).map_err(|_| "COULD NOT ENCODE. QUEUED LOCALLY.")?;
+    // Encryption is the transport's job: Noise already covers every hop, and a
+    // second layer here would be ceremony rather than protection.
+    let payload = public_payload(intent).ok_or("COULD NOT ENCODE. QUEUED LOCALLY.")?;
     let privacy_intent = crate::mesh::PrivacyIntent {
         id: intent.id.to_string(),
         intent_type: "intent".into(),

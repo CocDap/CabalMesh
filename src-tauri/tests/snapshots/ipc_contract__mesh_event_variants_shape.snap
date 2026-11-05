@@ -26,8 +26,8 @@ expression: shape(&events)
     }
   },
   {
-    "type": "DealAccepted",
-    "details": "deal 3 accepted"
+    "type": "Negotiation",
+    "details": "offer 3"
   },
   {
     "type": "SettlementComplete",

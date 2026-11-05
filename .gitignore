@@ -28,3 +28,4 @@ dist-mobile/
 # NEAR Intents spike: testnet keys and run output
 scripts/near-intents-spike/.keys.json
 scripts/near-intents-spike/.run.json
+.gstack/

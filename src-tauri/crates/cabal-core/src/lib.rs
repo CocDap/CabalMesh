@@ -31,6 +31,7 @@ pub mod money;
 
 pub use ids::{IntentId, NodeId, ProofHash, SubscriptionId};
 pub use intent::{
+    PublicIntent,
     Action, Chain, Condition, ExecutionMode, FailureReason, IntentDraft, IntentStatus, PrivacyLevel,
 };
 pub use money::{AmountError, TokenAmount, UsdPrice};

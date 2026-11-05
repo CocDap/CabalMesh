@@ -634,6 +634,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cabal-negotiation"
+version = "0.1.0"
+dependencies = [
+ "cabal-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cabal-relay"
 version = "0.1.0"
 dependencies = [
@@ -687,6 +696,7 @@ dependencies = [
  "cabal-core",
  "cabal-guardian",
  "cabal-near",
+ "cabal-negotiation",
  "cabal-store",
  "cabal-vault",
  "chrono",

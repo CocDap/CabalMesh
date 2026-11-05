@@ -185,7 +185,7 @@ export function Detail({ id, onSettled }: { id: IntentId; onSettled: (id: Intent
         disabled={busy || !detail?.canSettle}
         onClick={() => act("settle_intent")}
       >
-        SIGN YOUR SIDE
+        CONFIRM TO SETTLE
       </Button>
 
       {detail?.canCancel ? (

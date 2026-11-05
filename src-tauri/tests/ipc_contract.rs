@@ -187,8 +187,8 @@ fn mesh_event_variants_shape() {
                 relay_fee: None,
             },
         },
-        MeshEvent::DealAccepted {
-            details: "deal 3 accepted".into(),
+        MeshEvent::Negotiation {
+            details: "offer 3".into(),
         },
         MeshEvent::SettlementComplete {
             details: "settled in 11.4s".into(),

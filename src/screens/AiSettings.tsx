@@ -202,7 +202,7 @@ export function AiSettings() {
         </Field>
 
         {form.preset !== "ollama-local" ? (
-          <span style={noteStyle}>YOUR PRICE LIMITS AND CHAT TEXT GO TO THIS ENDPOINT.</span>
+          <span style={noteStyle}>YOUR CHAT TEXT AND OFFERS GO TO THIS ENDPOINT.</span>
         ) : null}
 
         {error ? (
