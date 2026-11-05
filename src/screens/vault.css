@@ -1,0 +1,66 @@
+.vault-assets {
+  --vault-label-color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+  font-family: var(--font-mono);
+}
+
+.vault-account { padding: var(--space-6); }
+.vault-account-network { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4); margin-bottom: var(--space-5); font-size: var(--text-xs); color: var(--text-primary); }
+.vault-caption { display: block; font-size: var(--text-2xs); letter-spacing: var(--tracking-wide); color: var(--vault-label-color); }
+.vault-public-value { display: flex; align-items: center; gap: var(--space-5); min-width: 0; }
+.vault-public-value > button { flex-shrink: 0; min-height: 48px; padding-inline: var(--space-4); color: var(--text-secondary); }
+.vault-address { flex: 1; min-width: 0; font-size: var(--text-xs); line-height: 1.6; overflow-wrap: anywhere; color: var(--text-primary); }
+.vault-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-6); }
+.vault-actions > button { min-height: 48px; padding: var(--space-5); color: var(--text-primary); }
+.vault-holdings { padding: 0 var(--space-6) var(--space-6); }
+.vault-note { margin: 0; color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.7; }
+.vault-assets-intro { padding-block: var(--space-5) var(--space-6); }
+.vault-token-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--text-xs); }
+.vault-token-table th, .vault-token-table td { padding: var(--space-6) var(--space-2); vertical-align: top; text-align: right; overflow-wrap: anywhere; }
+.vault-token-table thead th { font-size: var(--text-2xs); font-weight: 400; letter-spacing: var(--tracking-wide); color: var(--vault-label-color); padding-block: 0 var(--space-5); }
+.vault-token-table th:first-child { width: 33%; text-align: left; padding-left: 0; }
+.vault-token-table td:last-child, .vault-token-table th:last-child { padding-right: 0; }
+.vault-token-table tbody tr { border-top: var(--border-hairline-style); }
+.vault-token-table tbody th { font-weight: 400; }
+.vault-token-symbol { display: block; color: var(--text-primary); font-size: var(--text-base); font-weight: 500; line-height: 1.3; }
+.vault-token-note { display: block; margin-top: var(--space-3); font-size: var(--text-2xs); line-height: 1.5; color: var(--vault-label-color); }
+.vault-token-amount { color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.6; }
+.vault-not-applicable { color: var(--text-muted); line-height: 1.6; }
+.vault-balance-note { padding-top: var(--space-5); border-top: var(--border-hairline-style); font-size: var(--text-2xs); }
+.vault-warning { margin: var(--space-4) 0 0; color: var(--accent-blood-red); font-size: var(--text-xs); line-height: 1.6; overflow-wrap: anywhere; }
+.vault-transfer { display: flex; flex-direction: column; gap: var(--space-5); }
+.vault-back { align-self: flex-start; min-height: 48px; padding-left: 0 !important; color: var(--text-secondary) !important; }
+.vault-transfer-content { padding: var(--space-7) var(--space-6); display: flex; flex-direction: column; gap: var(--space-6); }
+.vault-transfer-content h2 { margin: 0; font-family: var(--font-display); font-size: var(--text-xl); font-weight: 400; color: var(--text-primary); }
+.vault-transfer-content h2:focus { outline: none; }
+.vault-transfer-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-5); }
+.vault-transfer-route { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: var(--space-5); align-items: center; padding-block: var(--space-6); border-block: var(--border-hairline-style); color: var(--text-primary); font-size: var(--text-sm); }
+.vault-transfer-route > div { display: flex; flex-direction: column; gap: var(--space-3); }
+.vault-transfer-route > div:last-child { text-align: right; }
+.vault-transfer-form { display: flex; flex-direction: column; gap: var(--space-6); }
+.vault-transfer-form label { color: var(--vault-label-color) !important; }
+.vault-token-select { width: 100%; min-height: 48px; background: var(--surface-inset); color: var(--text-primary); font-family: var(--font-mono); font-size: var(--text-sm); border: var(--border-default-style); border-radius: 0; padding: var(--space-5); }
+.vault-token-select:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; }
+.vault-token-select:disabled { opacity: 0.5; }
+.vault-transfer-form input { min-height: 48px; font-size: var(--text-md) !important; font-variant-numeric: tabular-nums; }
+.vault-transfer-form input::placeholder { color: var(--text-muted); }
+.vault-transfer-form > button { min-height: 48px; padding-inline: var(--space-5); }
+.vault-available { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4); font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.6; }
+.vault-available > span:last-child { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vault-transfer-success { border-top: var(--border-hairline-style); padding-top: var(--space-6); }
+.vault-transfer-success > p:first-child { margin: 0 0 var(--space-4); font-size: var(--text-sm); color: var(--text-primary); }
+.vault-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+@media (min-width: 600px) {
+  .vault-account, .vault-holdings, .vault-transfer-content { padding-inline: var(--space-8); }
+  .vault-token-table { font-size: var(--text-sm); }
+}
+
+@media (max-width: 340px) {
+  .vault-account, .vault-holdings, .vault-transfer-content { padding-inline: var(--space-5); }
+  .vault-actions { gap: var(--space-4); }
+  .vault-token-note { letter-spacing: 0; }
+}

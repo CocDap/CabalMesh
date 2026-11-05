@@ -1,13 +1,13 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Button, Checkbox, Field, IconButton, Input, Panel } from "../ds";
+import { Button, Checkbox, Field, Input, Panel } from "../ds";
 import { errorCopy } from "../state/errorCopy";
+import { VaultAssets } from "./VaultAssets";
 import type { VaultTab } from "../shell/screen";
 import type {
   GuardianCandidate,
   GuardianEnrollResult,
   GuardianStatus,
-  NearAccountView,
   SecurityStatus,
   VaultRow,
 } from "../types/bindings";
@@ -25,11 +25,6 @@ const COMMAND: Record<VaultTab, string> = {
 /**
  * Assets, identities and key metadata.
  *
- * **The total is masked by default and only fetched on reveal.** Sending the
- * value and hiding it in CSS would put the balance in the DOM of a screen the
- * user asked not to show it on — masking is presentation, so the *value* has to
- * be absent, not merely covered.
- *
  * The KEYS tab never renders key material. It describes what is held and where;
  * the values stay in the encrypted vault. That is the promise the screen's own
  * copy makes, and the command keeps it too.
@@ -42,12 +37,12 @@ export function Vault({
   onTabChange: (tab: VaultTab) => void;
 }) {
   const [rows, setRows] = useState<VaultRow[] | null>(null);
-  const [revealed, setRevealed] = useState(false);
   const [security, setSecurity] = useState<SecurityStatus | null>(null);
-  const [refreshingBalance, setRefreshingBalance] = useState(false);
 
   useEffect(() => {
+    if (tab === "ASSETS") return;
     let cancelled = false;
+    setRows(null);
     invoke<VaultRow[]>(COMMAND[tab])
       .then((next) => {
         if (!cancelled) setRows(next);
@@ -70,24 +65,9 @@ export function Vault({
   };
   useEffect(refreshSecurity, []);
 
-  // Reads the chain rather than the cache — the whole point of the button is to
-  // catch a balance that changed since the last read.
-  const refreshBalance = async () => {
-    if (refreshingBalance) return;
-    setRefreshingBalance(true);
-    try {
-      setRows(await invoke<VaultRow[]>("vault_refresh_balance"));
-    } catch {
-      // Offline or RPC unreachable — keep showing the last known balances
-      // rather than clearing them.
-    } finally {
-      setRefreshingBalance(false);
-    }
-  };
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)", padding: "var(--space-6)" }}>
-      <div role="tablist" aria-label="Vault section" style={{ display: "flex", gap: "var(--space-7)" }}>
+      <div role="tablist" aria-label="Vault section" style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-7)" }}>
         {TABS.map((name) => (
           <button
             key={name}
@@ -116,68 +96,17 @@ export function Vault({
         ))}
       </div>
 
-      {tab === "ASSETS" && <NearPanel rows={rows} onBalances={setRows} />}
-
-      {tab === "ASSETS" && (
-        <Panel label="TOTAL VALUE (PRIVATE)">
-          <div
-            className="cm-row"
-            style={{
-              padding: "var(--space-6)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "var(--space-5)",
-            }}
-          >
-            <span
-              style={{
-                fontFamily: "var(--type-data-family)",
-                fontSize: "var(--text-lg)",
-                letterSpacing: "var(--type-data-tracking)",
-                color: "var(--text-primary)",
-              }}
-            >
-              {/* Not fetched unless revealed — see the note above. */}
-              {revealed ? "—" : "✱✱✱✱✱"}
-            </span>
-            <IconButton
-              size="md"
-              tone="outline"
-              className="cm-touch"
-              aria-label={revealed ? "Hide total value" : "Reveal total value"}
-              aria-pressed={revealed}
-              onClick={() => setRevealed((previous) => !previous)}
-            >
-              {revealed ? "×" : "◎"}
-            </IconButton>
-          </div>
+      {tab === "ASSETS" ? (
+        <VaultAssets />
+      ) : (
+        <Panel label={tab}>
+          {rows === null ? null : rows.length === 0 ? (
+            <Empty tab={tab} />
+          ) : (
+            rows.map((row) => <Row key={`${row.tag}-${row.name}-${row.detail ?? ""}`} row={row} />)
+          )}
         </Panel>
       )}
-
-      <Panel
-        label={tab}
-        action={
-          tab === "ASSETS" ? (
-            <IconButton
-              size="sm"
-              tone="outline"
-              className="cm-touch"
-              aria-label="Refresh balance"
-              disabled={refreshingBalance}
-              onClick={() => void refreshBalance()}
-            >
-              {refreshingBalance ? "…" : "↻"}
-            </IconButton>
-          ) : undefined
-        }
-      >
-        {rows === null ? null : rows.length === 0 ? (
-          <Empty tab={tab} />
-        ) : (
-          rows.map((row) => <Row key={`${row.tag}-${row.name}-${row.detail ?? ""}`} row={row} />)
-        )}
-      </Panel>
 
       {tab === "KEYS" && (
         <SecurityPanel
@@ -194,219 +123,6 @@ export function Vault({
       {tab === "KEYS" && <AdvancedPanel />}
     </div>
   );
-}
-
-const panelText: CSSProperties = {
-  fontFamily: "var(--type-label-family)",
-  fontSize: "var(--text-2xs)",
-  letterSpacing: "var(--tracking-wide)",
-  color: "var(--text-muted)",
-};
-
-const dataText: CSSProperties = {
-  fontFamily: "var(--type-data-family)",
-  fontSize: "var(--text-2xs)",
-  letterSpacing: "var(--type-data-tracking)",
-  color: "var(--text-primary)",
-  wordBreak: "break-all",
-};
-
-/** A value someone will paste elsewhere, with a button that says what happened. */
-function CopyRow({ value }: { value: string }) {
-  const [copyLabel, setCopyLabel] = useState<"COPY" | "COPIED" | "COPY FAILED">("COPY");
-
-  const copy = async () => {
-    try {
-      await copyText(value);
-      setCopyLabel("COPIED");
-    } catch {
-      setCopyLabel("COPY FAILED");
-    }
-    window.setTimeout(() => setCopyLabel("COPY"), 2_000);
-  };
-
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-5)" }}>
-      <span style={dataText}>{value}</span>
-      <Button tone="ghost" size="sm" className="cm-touch" aria-live="polite" onClick={() => void copy()}>
-        {copyLabel}
-      </Button>
-    </div>
-  );
-}
-
-/**
- * This device's NEAR account, and moving tokens in and out of the verifier.
- *
- * Only a balance inside the verifier can trade, which is why deposit and
- * withdraw are explicit: moving funds is a transaction that costs gas, and
- * trading is a signature that costs nothing.
- *
- * Nothing here is sensitive. An account id is meant to be handed out, so it
- * renders immediately, full and copyable. Links are copied rather than opened
- * because the opener plugin is not granted on mobile.
- */
-function NearPanel({ rows, onBalances }: { rows: VaultRow[] | null; onBalances: (rows: VaultRow[]) => void }) {
-  const [account, setAccount] = useState<NearAccountView | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [amount, setAmount] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [lastTx, setLastTx] = useState<string | null>(null);
-
-  // The balances it shows are the ones the rows came from, so a refresh of
-  // either has to redraw both.
-  useEffect(() => {
-    let cancelled = false;
-    invoke<NearAccountView>("near_account")
-      .then((next) => {
-        if (!cancelled) setAccount(next);
-      })
-      .catch(() => {
-        if (!cancelled) setAccount(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [rows]);
-
-  if (!account) return null;
-
-  const chosen = token ?? account.tokens[0]?.symbol ?? "";
-  // Absent means never read, which says nothing about the account. Only a read
-  // that came back zero is a reason to tell someone to fund it.
-  const unfunded = account.nativeBalance !== undefined && Number(account.nativeBalance) === 0;
-
-  const move = async (command: "near_deposit" | "near_withdraw") => {
-    setBusy(true);
-    setError(null);
-    setLastTx(null);
-    try {
-      setLastTx(await invoke<string>(command, { token: chosen, amount }));
-      setAmount("");
-      onBalances(await invoke<VaultRow[]>("vault_assets"));
-    } catch (failure) {
-      setError(errorCopy(failure));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Panel label={`NEAR ACCOUNT · ${account.network.toUpperCase()}`}>
-      <div className="cm-row" style={{ padding: "var(--space-6)", display: "flex", flexDirection: "column", gap: "var(--space-5)" }}>
-        <CopyRow value={account.accountId} />
-
-        {unfunded && (
-          <span style={{ ...panelText, color: "var(--accent-blood-red)" }}>
-            FUND THIS ACCOUNT WITH {account.faucetLinks.length > 0 ? "TESTNET " : ""}NEAR FIRST
-          </span>
-        )}
-
-        <span style={panelText}>
-          NATIVE NEAR PAYS GAS FOR DEPOSIT, WITHDRAW AND SUBMITTING A DEAL. TRADING ITSELF NEEDS ONLY A BALANCE IN INTENTS.
-        </span>
-
-        {account.faucetLinks.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-            <span style={panelText}>TEST FUNDS</span>
-            {account.faucetLinks.map((link) => (
-              <CopyRow key={link} value={link} />
-            ))}
-          </div>
-        )}
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-          <span style={panelText}>EXPLORER</span>
-          <CopyRow value={account.explorerUrl} />
-        </div>
-
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void move("near_deposit");
-          }}
-          style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}
-        >
-          <div role="radiogroup" aria-label="Token" style={{ display: "flex", gap: "var(--space-3)" }}>
-            {account.tokens.map((option) => (
-              <Button
-                key={option.symbol}
-                type="button"
-                role="radio"
-                aria-checked={option.symbol === chosen}
-                tone={option.symbol === chosen ? "secondary" : "ghost"}
-                size="sm"
-                className="cm-touch"
-                onClick={() => setToken(option.symbol)}
-              >
-                {option.symbol}
-              </Button>
-            ))}
-          </div>
-          <Field label={`AMOUNT (${chosen})`} htmlFor="near-move-amount" error={error ?? undefined}>
-            <Input
-              id="near-move-amount"
-              inputMode="decimal"
-              autoComplete="off"
-              value={amount}
-              onChange={(event) => setAmount((event.target as HTMLInputElement).value)}
-            />
-          </Field>
-          <div style={{ display: "flex", gap: "var(--space-3)" }}>
-            <Button tone="primary" size="sm" className="cm-touch" type="submit" disabled={busy || !amount}>
-              {busy ? "SENDING…" : "DEPOSIT"}
-            </Button>
-            <Button
-              tone="secondary"
-              size="sm"
-              className="cm-touch"
-              type="button"
-              disabled={busy || !amount}
-              onClick={() => void move("near_withdraw")}
-            >
-              WITHDRAW
-            </Button>
-          </div>
-        </form>
-
-        {lastTx && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-            <span style={panelText}>SENT</span>
-            <CopyRow value={lastTx} />
-          </div>
-        )}
-      </div>
-    </Panel>
-  );
-}
-
-/**
- * Android WebView does not consistently expose the asynchronous Clipboard
- * API. Try the user-gesture-safe selection path first, then use the modern API
- * where it is available. The temporary field never contains key material —
- * only public values already rendered on screen.
- */
-async function copyText(text: string): Promise<void> {
-  const field = document.createElement("textarea");
-  field.value = text;
-  field.readOnly = true;
-  field.style.position = "fixed";
-  field.style.opacity = "0";
-  document.body.appendChild(field);
-  field.select();
-  field.setSelectionRange(0, text.length);
-
-  let copied = false;
-  try {
-    copied = document.execCommand("copy");
-  } finally {
-    field.remove();
-  }
-
-  if (copied) return;
-  if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
-  await navigator.clipboard.writeText(text);
 }
 
 /**
