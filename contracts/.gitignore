@@ -1,0 +1,4 @@
+target/
+res/
+*.wasm
+neardev/

@@ -1,0 +1,12 @@
+[package]
+name = "cabal-test-token"
+version = "0.1.0"
+edition = "2021"
+description = "Test only: credits a verifier balance, as a fungible token's ft_transfer_call would."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+near-sdk = { workspace = true }

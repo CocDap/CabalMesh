@@ -8,13 +8,17 @@
 
 #![forbid(unsafe_code)]
 
+mod events;
 mod intents;
 mod keys;
 mod nep413;
 mod quote;
 mod tx;
 
-pub use intents::{ft_withdraw_payload, token_diff_payload, versioned_nonce, TokenDiff};
+pub use events::settlements_for;
+pub use intents::{
+    ft_withdraw_payload, token_diff_payload, versioned_nonce, GatewayFee, TokenDiff,
+};
 pub use keys::{AccountId, InvalidAccountId, NearKeypair};
 pub use nep413::{verify, MultiPayload, Nep413Payload, PayloadError};
 pub use quote::{buyer_diff, quote_amount, seller_diff, FeeRule};

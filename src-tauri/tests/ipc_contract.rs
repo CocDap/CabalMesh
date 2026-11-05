@@ -198,7 +198,7 @@ fn signed_diff_shape() {
         deal_id: "a:b".into(),
         chain: Chain::NearTestnet,
         side: "sell".into(),
-        payload: token_diff_payload(&keypair, &verifier, &diff, 1_900_000_000_000, [7; 32]),
+        payload: token_diff_payload(&keypair, &verifier, &diff, None, 1_900_000_000_000, [7; 32]),
     }));
 }
 

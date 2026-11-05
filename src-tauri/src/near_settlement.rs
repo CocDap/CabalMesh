@@ -253,7 +253,14 @@ pub fn sign_half(
     } else {
         buyer_diff(&base, &quote, base_raw, quote_raw, &FeeRule::NONE)
     };
-    token_diff_payload(keypair, verifier, &diff, deadline_ms, nonce)
+    token_diff_payload(
+        keypair,
+        verifier,
+        &diff,
+        near.gateway_fee().as_ref(),
+        deadline_ms,
+        nonce,
+    )
 }
 
 /// Signs `intent`'s side of its deal, holds it, and fixes the deal.
@@ -382,7 +389,7 @@ pub async fn submit_held(ledger: &Ledger, book: &DiffBook, bridge: &NearBridge) 
         let Some(pair) = book.claim(&deal) else {
             continue;
         };
-        match bridge.execute_intents(&pair).await {
+        match bridge.submit_pair(&pair).await {
             Ok(TxHash(tx)) => {
                 book.mark_submitted(&deal);
                 mark_settled(ledger, &deal, &tx);
@@ -680,6 +687,41 @@ mod tests {
     }
 
     #[test]
+    fn a_half_signs_the_fee_only_when_the_network_pays_gateways() {
+        let keypair = NearKeypair::from_secret_bytes(&[4; 32]);
+        let verifier = AccountId::try_from(VERIFIER).unwrap();
+        let paying = NearConfig {
+            rewards: Some("rewards.test"),
+            fee_per_side: 10_000,
+            ..near()
+        };
+        let fee = paying.gateway_fee().unwrap();
+
+        let half = sign_half(
+            &keypair,
+            &verifier,
+            &paying,
+            Action::Sell,
+            1,
+            1,
+            1_000,
+            [0; 32],
+        );
+        assert!(fee.paid_by(&half));
+        let half = sign_half(
+            &keypair,
+            &verifier,
+            &near(),
+            Action::Sell,
+            1,
+            1,
+            1_000,
+            [0; 32],
+        );
+        assert!(!fee.paid_by(&half));
+    }
+
+    #[test]
     fn deal_ids_are_the_same_from_both_ends() {
         assert_eq!(deal_id("B", "A"), deal_id("A", "B"));
     }
@@ -918,7 +960,9 @@ mod tests {
             result(json!({
                 "status": { "SuccessValue": "" },
                 "transaction": { "receiver_id": VERIFIER },
-                "receipts_outcome": [{ "outcome": { "logs": logs } }],
+                "receipts_outcome": [{
+                    "outcome": { "executor_id": VERIFIER, "status": { "SuccessValue": "" }, "logs": logs },
+                }],
             }))
         })
         .await;

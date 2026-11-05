@@ -122,6 +122,69 @@ async fn balances(bridge: &NearBridge) -> (u128, u128) {
     )
 }
 
+/// Run after deploying the rewards contract: a real pair through the real thing.
+///
+/// ```bash
+/// CABALMESH_REWARDS_ID=rewards.you.testnet cargo test --test near_live \\
+///   the_deployed_rewards_contract_pays_the_gateway -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "needs a deployed contract, CABALMESH_REWARDS_ID and spike keys"]
+async fn the_deployed_rewards_contract_pays_the_gateway() {
+    let rewards: &'static str = std::env::var("CABALMESH_REWARDS_ID")
+        .expect("set CABALMESH_REWARDS_ID to the deployed contract")
+        .leak();
+    let near = NearConfig {
+        rewards: Some(rewards),
+        ..near()
+    };
+    let fee = near.gateway_fee().expect("a valid account id");
+    let verifier = AccountId::try_from(near.verifier).unwrap();
+    let (a, b) = (key("A"), key("B"));
+    let gateway = bridge("G").with_gateway_fee(Some(fee.clone()));
+    let salt = gateway.current_salt().await.unwrap();
+    let deadline = now() + 3_600_000;
+
+    let sign = |keypair: &NearKeypair, side| {
+        settlement::sign_half(
+            keypair,
+            &verifier,
+            &near,
+            side,
+            AMOUNT,
+            QUOTE,
+            deadline,
+            settlement::fresh_nonce(Some(salt), deadline),
+        )
+    };
+    let pair = [sign(&a, Action::Sell), sign(&b, Action::Buy)];
+
+    let before = gateway.verifier_balance(near.quote.contract).await.unwrap();
+    let hash = gateway
+        .submit_pair(&pair)
+        .await
+        .expect("the contract takes the pair");
+    println!("settled through the contract: {}", hash.0);
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    assert_eq!(
+        gateway.verifier_balance(near.quote.contract).await.unwrap(),
+        before + 2 * fee.amount,
+        "the gateway is paid both fees"
+    );
+    let needle = pair[0]
+        .hash()
+        .map(|hash| bs58::encode(hash).into_string())
+        .unwrap();
+    assert!(
+        gateway
+            .tx_logged(&hash.0, gateway.account_id().as_str(), &needle)
+            .await
+            .unwrap(),
+        "a peer can prove this settlement from the verifier's own receipt"
+    );
+}
+
 /// Two devices, a gateway that holds neither token, and a device with no gas.
 #[tokio::test]
 #[ignore = "spends testnet gas and needs scripts/near-intents-spike/.keys.json"]

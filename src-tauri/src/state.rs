@@ -93,7 +93,10 @@ impl Services {
     pub async fn near(&self) -> Result<NearBridge, AppError> {
         let keypair = self.identity.lock().await.primary_keypair().ok_or(AppError::VaultLocked)?;
         let config = crate::network_config::NetworkConfig::current();
-        NearBridge::new(config.rpc_url(), &config.verifier(), keypair, self.http.clone()).map_err(AppError::internal)
+        let fee = config.near().gateway_fee();
+        NearBridge::new(config.rpc_url(), &config.verifier(), keypair, self.http.clone())
+            .map(|bridge| bridge.with_gateway_fee(fee))
+            .map_err(AppError::internal)
     }
 }
 

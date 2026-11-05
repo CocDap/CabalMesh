@@ -55,6 +55,12 @@ pub struct NearConfig {
     /// Every trade is `asset ⇄ quote` at the agreed USD price.
     pub quote: AssetSpec,
     pub price_feed: &'static str,
+    /// The contract that pays gateways. `None` submits straight to the verifier
+    /// and charges no fee. Set it only once the contract is deployed, since a
+    /// fee signed to an account with no contract behind it pays nobody.
+    pub rewards: Option<&'static str>,
+    /// What each side pays the rewards contract, in the quote token's smallest unit.
+    pub fee_per_side: u128,
     /// Block explorer, with no trailing slash.
     pub explorer: &'static str,
     pub faucets: &'static [&'static str],
@@ -76,6 +82,8 @@ const TESTNET: NearConfig = NearConfig {
         contract: "usdc.tidepool-sandbox.testnet",
     },
     price_feed: "https://www.usetidepool.tech/v0/tokens",
+    rewards: None,
+    fee_per_side: 10_000,
     explorer: "https://testnet.nearblocks.io",
     faucets: &[
         "https://near-faucet.io/",
@@ -100,9 +108,23 @@ const MAINNET: NearConfig = NearConfig {
         contract: "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
     },
     price_feed: "https://1click.chaindefuser.com/v0/tokens",
+    rewards: None,
+    fee_per_side: 0,
     explorer: "https://nearblocks.io",
     faucets: &[],
 };
+
+impl NearConfig {
+    /// The fee a trader signs, or `None` if this network pays no gateways.
+    #[must_use]
+    pub fn gateway_fee(&self) -> Option<cabal_near::GatewayFee> {
+        Some(cabal_near::GatewayFee {
+            to: cabal_near::AccountId::try_from(self.rewards?).ok()?,
+            token: self.quote.token_id(),
+            amount: self.fee_per_side,
+        })
+    }
+}
 
 impl Network {
     /// Reads the name a config file or `CABALMESH_NETWORK` uses.
@@ -285,6 +307,24 @@ mod tests {
         assert_eq!(near.verifier, "intents.near");
         assert_eq!(near.base.contract, "wrap.near");
         assert_eq!(near.price_feed, "https://1click.chaindefuser.com/v0/tokens");
+    }
+
+    #[test]
+    fn mainnet_charges_no_fee_until_its_contract_is_audited() {
+        assert_eq!(Network::Mainnet.near().gateway_fee(), None);
+    }
+
+    #[test]
+    fn a_gateway_fee_is_paid_in_the_quote_token() {
+        let near = NearConfig {
+            rewards: Some("rewards.test"),
+            fee_per_side: 10_000,
+            ..Network::Testnet.near()
+        };
+        let fee = near.gateway_fee().unwrap();
+        assert_eq!(fee.to.as_str(), "rewards.test");
+        assert_eq!(fee.token, near.quote.token_id());
+        assert_eq!(fee.amount, 10_000);
     }
 
     #[test]

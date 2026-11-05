@@ -59,7 +59,7 @@ fn hash_of(message: &str, nonce: [u8; 32], recipient: &str) -> [u8; 32] {
 }
 
 impl MultiPayload {
-    pub(crate) fn sign(signer: &NearKeypair, message: String, nonce: [u8; 32], recipient: &str) -> Self {
+    pub fn sign(signer: &NearKeypair, message: String, nonce: [u8; 32], recipient: &str) -> Self {
         let signature = signer.sign(&hash_of(&message, nonce, recipient));
         Self {
             standard: "nep413".to_owned(),

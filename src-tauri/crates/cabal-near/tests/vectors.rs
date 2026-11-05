@@ -37,6 +37,7 @@ fn fixture_payload() -> MultiPayload {
         &keypair_of(&f),
         &verifier,
         &diff_of(&f),
+        None,
         f["deadline_ms"].as_u64().unwrap(),
         hex32(&f["nonce_hex"]),
     )

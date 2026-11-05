@@ -4,7 +4,7 @@
 //! it holds nothing. A cached figure is shown as what it is: the last one seen.
 
 use crate::near_bridge::{NearBridge, NearError};
-use crate::network_config::{AssetSpec, Network};
+use crate::network_config::{AssetSpec, NearConfig, Network};
 use cabal_core::{Action, Condition, IntentDraft};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -94,15 +94,25 @@ impl Balances {
 /// the most its ceiling could cost, and with no ceiling there is no figure to
 /// check.
 #[must_use]
-pub fn covers(balances: &Balances, draft: &IntentDraft, base: &AssetSpec, quote: &AssetSpec) -> bool {
+pub fn covers(balances: &Balances, draft: &IntentDraft, near: &NearConfig) -> bool {
+    let (base, quote) = (&near.base, &near.quote);
     match draft.action {
-        Action::Sell => balances.in_intents_raw(base.symbol).is_none_or(|held| held >= draft.amount.raw()),
+        // The seller's fee comes out of what the trade pays them.
+        Action::Sell => balances
+            .in_intents_raw(base.symbol)
+            .is_none_or(|held| held >= draft.amount.raw()),
         Action::Buy => {
             let Condition::Under { price } = draft.condition else {
                 return true;
             };
-            let Some(cost) = cabal_near::quote_amount(draft.amount.raw(), base.decimals, price.cents(), quote.decimals)
-            else {
+            let fee = near.gateway_fee().map_or(0, |fee| fee.amount);
+            let Some(cost) = cabal_near::quote_amount(
+                draft.amount.raw(),
+                base.decimals,
+                price.cents(),
+                quote.decimals,
+            )
+            .and_then(|cost| cost.checked_add(fee)) else {
                 return false;
             };
             balances.in_intents_raw(quote.symbol).is_none_or(|held| held >= cost)
@@ -119,9 +129,8 @@ mod tests {
 
     const WNEAR: u128 = 1_000_000_000_000_000_000_000_000;
 
-    fn specs() -> (AssetSpec, AssetSpec) {
-        let near = Network::Testnet.near();
-        (near.base, near.quote)
+    fn testnet() -> NearConfig {
+        Network::Testnet.near()
     }
 
     fn held(wnear: u128, usdc: u128) -> Balances {
@@ -149,30 +158,73 @@ mod tests {
 
     #[test]
     fn broadcast_rejects_near_amount_above_intents_balance() {
-        let (base, quote) = specs();
         let sell = draft(Action::Sell, "1", Condition::Any);
-        assert!(!covers(&held(WNEAR / 2, 0), &sell, &base, &quote));
-        assert!(covers(&held(WNEAR, 0), &sell, &base, &quote));
+        assert!(!covers(&held(WNEAR / 2, 0), &sell, &testnet()));
+        assert!(covers(&held(WNEAR, 0), &sell, &testnet()));
     }
 
     #[test]
     fn a_buy_is_checked_against_quote_at_its_ceiling() {
-        let (base, quote) = specs();
-        let buy = draft(Action::Buy, "1", Condition::Under { price: UsdPrice::from_cents(420) });
-        assert!(!covers(&held(0, 4_199_999), &buy, &base, &quote));
-        assert!(covers(&held(0, 4_200_000), &buy, &base, &quote));
+        let buy = draft(
+            Action::Buy,
+            "1",
+            Condition::Under {
+                price: UsdPrice::from_cents(420),
+            },
+        );
+        let near = NearConfig { rewards: None, ..testnet() };
+        assert!(!covers(&held(0, 4_199_999), &buy, &near));
+        assert!(covers(&held(0, 4_200_000), &buy, &near));
+    }
+
+    #[test]
+    fn a_buy_must_also_cover_the_gateway_fee() {
+        let near = NearConfig {
+            rewards: Some("rewards.test"),
+            fee_per_side: 10_000,
+            ..testnet()
+        };
+        let buy = draft(
+            Action::Buy,
+            "1",
+            Condition::Under {
+                price: UsdPrice::from_cents(420),
+            },
+        );
+        assert!(!covers(&held(0, 4_200_000), &buy, &near));
+        assert!(covers(&held(0, 4_210_000), &buy, &near));
+    }
+
+    #[test]
+    fn a_sell_needs_none_of_the_quote_for_its_fee() {
+        let near = NearConfig {
+            rewards: Some("rewards.test"),
+            fee_per_side: 10_000,
+            ..testnet()
+        };
+        assert!(covers(
+            &held(WNEAR, 0),
+            &draft(Action::Sell, "1", Condition::Any),
+            &near
+        ));
     }
 
     #[test]
     fn a_buy_with_no_ceiling_has_no_figure_to_check() {
-        let (base, quote) = specs();
-        assert!(covers(&held(0, 0), &draft(Action::Buy, "1", Condition::Any), &base, &quote));
+        assert!(covers(
+            &held(0, 0),
+            &draft(Action::Buy, "1", Condition::Any),
+            &testnet()
+        ));
     }
 
     #[test]
     fn an_unknown_balance_lets_the_draft_through() {
-        let (base, quote) = specs();
-        assert!(covers(&Balances::default(), &draft(Action::Sell, "1", Condition::Any), &base, &quote));
+        assert!(covers(
+            &Balances::default(),
+            &draft(Action::Sell, "1", Condition::Any),
+            &testnet()
+        ));
     }
 
     #[test]

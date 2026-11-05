@@ -21,13 +21,6 @@ src-tauri/tauri-plugin-*/android/build/
 dist-desktop/
 dist-mobile/
 
-# Hardhat
-contracts/node_modules/
-contracts/artifacts/
-contracts/cache/
-contracts/typechain-types/
-contracts/.env
-
 # OS
 .DS_Store
 .scratch/

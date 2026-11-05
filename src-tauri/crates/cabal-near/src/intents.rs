@@ -72,7 +72,7 @@ fn render_deadline(deadline_unix_ms: u64) -> String {
 struct IntentMessage<'a, I: Serialize> {
     signer_id: &'a str,
     deadline: String,
-    intents: [I; 1],
+    intents: Vec<I>,
 }
 
 #[derive(Serialize)]
@@ -86,12 +86,51 @@ enum Intent<'a> {
         receiver_id: &'a str,
         amount: String,
     },
+    Transfer {
+        receiver_id: &'a str,
+        tokens: BTreeMap<&'a str, String>,
+    },
+}
+
+/// What a trader pays the rewards contract for whichever gateway submits.
+///
+/// Paid to the contract rather than a gateway, so it can be signed offline
+/// without knowing who will submit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayFee {
+    pub to: AccountId,
+    pub token: String,
+    pub amount: u128,
+}
+
+impl GatewayFee {
+    fn intent(&self) -> Intent<'_> {
+        Intent::Transfer {
+            receiver_id: self.to.as_str(),
+            tokens: BTreeMap::from([(self.token.as_str(), self.amount.to_string())]),
+        }
+    }
+
+    /// Whether this payload signed exactly this fee.
+    #[must_use]
+    pub fn paid_by(&self, payload: &MultiPayload) -> bool {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(&payload.payload.message)
+        else {
+            return false;
+        };
+        let Some(expected) = serde_json::to_value(self.intent()).ok() else {
+            return false;
+        };
+        message["intents"]
+            .as_array()
+            .is_some_and(|intents| intents.contains(&expected))
+    }
 }
 
 fn signed(
     signer: &NearKeypair,
     verifier: &AccountId,
-    intent: Intent<'_>,
+    intents: Vec<Intent<'_>>,
     deadline_unix_ms: u64,
     nonce: [u8; 32],
 ) -> MultiPayload {
@@ -99,23 +138,29 @@ fn signed(
     let message = IntentMessage {
         signer_id: account.as_str(),
         deadline: render_deadline(deadline_unix_ms),
-        intents: [intent],
+        intents,
     };
     // Plain structs of strings: serializing cannot fail.
     let message = serde_json::to_string(&message).unwrap_or_default();
     MultiPayload::sign(signer, message, nonce, verifier.as_str())
 }
 
-/// A signed `token_diff` intent.
+/// A signed `token_diff` intent, followed by the fee when there is one.
+///
+/// The diff comes first: the seller may hold none of the fee token until the
+/// trade pays it.
 #[must_use]
 pub fn token_diff_payload(
     signer: &NearKeypair,
     verifier: &AccountId,
     diff: &TokenDiff,
+    fee: Option<&GatewayFee>,
     deadline_unix_ms: u64,
     nonce: [u8; 32],
 ) -> MultiPayload {
-    signed(signer, verifier, Intent::TokenDiff { diff }, deadline_unix_ms, nonce)
+    let mut intents = vec![Intent::TokenDiff { diff }];
+    intents.extend(fee.map(GatewayFee::intent));
+    signed(signer, verifier, intents, deadline_unix_ms, nonce)
 }
 
 /// A signed `ft_withdraw` intent back to the signer's own account.
@@ -134,5 +179,61 @@ pub fn ft_withdraw_payload(
         receiver_id: account.as_str(),
         amount: amount.to_string(),
     };
-    signed(signer, verifier, intent, deadline_unix_ms, nonce)
+    signed(signer, verifier, vec![intent], deadline_unix_ms, nonce)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fee() -> GatewayFee {
+        GatewayFee {
+            to: AccountId::try_from("rewards.test").unwrap(),
+            token: "nep141:usdc.test".into(),
+            amount: 10_000,
+        }
+    }
+
+    fn signed_with(fee: Option<&GatewayFee>) -> MultiPayload {
+        let verifier = AccountId::try_from("verifier.test").unwrap();
+        let diff: TokenDiff = [("nep141:usdc.test".to_owned(), -1)].into_iter().collect();
+        token_diff_payload(
+            &NearKeypair::from_secret_bytes(&[3; 32]),
+            &verifier,
+            &diff,
+            fee,
+            1_000,
+            [0; 32],
+        )
+    }
+
+    #[test]
+    fn a_fee_is_a_transfer_signed_after_the_diff() {
+        let payload = signed_with(Some(&fee()));
+        let message: serde_json::Value = serde_json::from_str(&payload.payload.message).unwrap();
+        assert_eq!(message["intents"][0]["intent"], "token_diff");
+        assert_eq!(
+            message["intents"][1],
+            serde_json::json!({
+                "intent": "transfer",
+                "receiver_id": "rewards.test",
+                "tokens": { "nep141:usdc.test": "10000" },
+            })
+        );
+    }
+
+    #[test]
+    fn with_no_fee_the_message_holds_only_the_diff() {
+        let payload = signed_with(None);
+        let message: serde_json::Value = serde_json::from_str(&payload.payload.message).unwrap();
+        assert_eq!(message["intents"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_payload_pays_a_fee_only_if_it_signed_that_fee() {
+        assert!(fee().paid_by(&signed_with(Some(&fee()))));
+        assert!(!fee().paid_by(&signed_with(None)));
+        let other = GatewayFee { amount: 1, ..fee() };
+        assert!(!fee().paid_by(&signed_with(Some(&other))));
+    }
 }

@@ -1000,7 +1000,7 @@ pub async fn broadcast_intent(
     // Only a balance inside the verifier can settle, so a figure above it would
     // reach the far side of a negotiation before anyone found out.
     let near = crate::network_config::NetworkConfig::current().near();
-    if !crate::balances::covers(&cached_balances(&state).await, &draft, &near.base, &near.quote) {
+    if !crate::balances::covers(&cached_balances(&state).await, &draft, &near) {
         return Err(AppError::InvalidIntent {
             field: "amount",
             reason: crate::error::InvalidReason::InsufficientFunds,
@@ -1274,6 +1274,17 @@ fn detail_rows(intent: &crate::intents::Intent) -> Vec<ReviewRow> {
                 value: format!(
                     "{} {}",
                     cabal_core::TokenAmount::from_raw(quote, near.quote.decimals).to_plain_string(),
+                    near.quote.symbol
+                ),
+            });
+        }
+        if let Some(fee) = near.gateway_fee() {
+            rows.push(ReviewRow {
+                key: "GATEWAY FEE".into(),
+                value: format!(
+                    "{} {}",
+                    cabal_core::TokenAmount::from_raw(fee.amount, near.quote.decimals)
+                        .to_plain_string(),
                     near.quote.symbol
                 ),
             });

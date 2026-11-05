@@ -1,0 +1,16 @@
+# NEAR smart contracts. A workspace of its own, so the app's dependency tree in
+# src-tauri/ never sees near-sdk.
+[workspace]
+resolver = "2"
+members = ["rewards", "test-token"]
+
+[workspace.dependencies]
+near-sdk = "5.30"
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true

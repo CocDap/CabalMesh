@@ -4,11 +4,12 @@
 //! `cabal-near`; this file is the part that talks.
 
 use cabal_near::{
-    ft_withdraw_payload, sign_function_calls, versioned_nonce, AccountId, FunctionCall, MultiPayload, NearKeypair,
-    GAS_EXECUTE_INTENTS, GAS_FT_TRANSFER_CALL,
+    ft_withdraw_payload, sign_function_calls, versioned_nonce, AccountId, FunctionCall, GatewayFee,
+    MultiPayload, NearKeypair, GAS_EXECUTE_INTENTS, GAS_FT_TRANSFER_CALL,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Signed intents expire this long after signing.
@@ -63,12 +64,16 @@ fn names_missing_account(text: &str) -> bool {
         || text.contains("does not exist")
 }
 
+/// A bridge is rebuilt for each use, so "say it once" has to outlive one.
+static REWARDS_MISSING_SAID: AtomicBool = AtomicBool::new(false);
+
 #[derive(Clone)]
 pub struct NearBridge {
     rpc_url: String,
     verifier: AccountId,
     keypair: NearKeypair,
     http: reqwest::Client,
+    gateway_fee: Option<GatewayFee>,
 }
 
 impl NearBridge {
@@ -77,7 +82,14 @@ impl NearBridge {
     /// [`NearError::Rpc`] if the verifier id is not a valid account id.
     pub fn new(rpc_url: String, verifier: &str, keypair: NearKeypair, http: reqwest::Client) -> Result<Self, NearError> {
         let verifier = AccountId::try_from(verifier).map_err(|_| NearError::Rpc("invalid verifier id".into()))?;
-        Ok(Self { rpc_url, verifier, keypair, http })
+        Ok(Self { rpc_url, verifier, keypair, http, gateway_fee: None })
+    }
+
+    /// Submits pairs that pay this fee through the contract it names.
+    #[must_use]
+    pub fn with_gateway_fee(mut self, fee: Option<GatewayFee>) -> Self {
+        self.gateway_fee = fee;
+        self
     }
 
     #[must_use]
@@ -231,6 +243,49 @@ impl NearBridge {
         self.send(self.verifier.clone(), call).await
     }
 
+    /// Submits a matched pair, through the rewards contract if both sides paid
+    /// its fee, so this gateway gets paid for the gas.
+    ///
+    /// # Errors
+    ///
+    /// As [`NearBridge::execute_intents`], and any RPC failure while checking the
+    /// rewards contract: the pair waits rather than going out unpaid.
+    pub async fn submit_pair(&self, pair: &[MultiPayload; 2]) -> Result<TxHash, NearError> {
+        let Some(fee) = self
+            .gateway_fee
+            .as_ref()
+            .filter(|fee| pair.iter().all(|half| fee.paid_by(half)))
+        else {
+            return self.execute_intents(pair).await;
+        };
+        self.simulate(pair).await?;
+        if !self.rewards_deployed(&fee.to).await? {
+            return self.execute_intents(pair).await;
+        }
+        let call = FunctionCall {
+            method_name: "submit".into(),
+            args: json!({ "payloads": pair }).to_string().into_bytes(),
+            gas: GAS_EXECUTE_INTENTS,
+            deposit: 0,
+        };
+        self.send(fee.to.clone(), call).await
+    }
+
+    /// Whether the rewards contract answers. Its fee is still paid when it does
+    /// not, since the traders signed it, but the trade should not wait on it.
+    async fn rewards_deployed(&self, rewards: &AccountId) -> Result<bool, NearError> {
+        let missing = match self.view(rewards.as_str(), "config", &json!({})).await {
+            Ok(_) => return Ok(true),
+            Err(NearError::Rejected(reason)) => reason,
+            Err(NearError::Rpc(text)) if names_missing_account(&text) => text,
+            Err(error) => return Err(error),
+        };
+        if !REWARDS_MISSING_SAID.swap(true, Ordering::Relaxed) {
+            tracing::warn!(target: "cabalmesh::settlement", %rewards, %missing, "no rewards contract; submitting to the verifier");
+        }
+        Ok(false)
+    }
+
     /// Moves `amount` of `token` from the wallet into the verifier.
     ///
     /// # Errors
@@ -276,11 +331,14 @@ impl NearBridge {
             .ok_or_else(|| NearError::Rpc("is_nonce_used did not return a bool".into()))
     }
 
-    /// Whether a transaction finished and logged `needle`.
+    /// Whether the verifier itself ran a receipt in this transaction that
+    /// succeeded and logged `needle`.
     ///
     /// How a report from the mesh is checked before anything is believed: a
     /// peer can claim any hash, so the claim has to name a real, successful
-    /// verifier call that logged this device's own intent hash.
+    /// verifier call that logged this device's own intent hash. The transaction
+    /// may go through the rewards contract, so its receiver proves nothing, and
+    /// any contract can log any text, so the log has to be the verifier's own.
     ///
     /// # Errors
     ///
@@ -288,20 +346,23 @@ impl NearBridge {
     pub async fn tx_logged(&self, hash: &str, sender: &str, needle: &str) -> Result<bool, NearError> {
         let params = json!({ "tx_hash": hash, "sender_account_id": sender, "wait_until": "FINAL" });
         let outcome = self.rpc("tx", params).await?;
-        if outcome.pointer("/status/SuccessValue").is_none()
-            || outcome.pointer("/transaction/receiver_id").and_then(Value::as_str) != Some(self.verifier.as_str())
-        {
-            return Ok(false);
-        }
         let logged = outcome
             .get("receipts_outcome")
             .and_then(Value::as_array)
             .is_some_and(|receipts| {
                 receipts.iter().any(|receipt| {
                     receipt
-                        .pointer("/outcome/logs")
-                        .and_then(Value::as_array)
-                        .is_some_and(|logs| logs.iter().any(|log| log.as_str().is_some_and(|l| l.contains(needle))))
+                        .pointer("/outcome/executor_id")
+                        .and_then(Value::as_str)
+                        == Some(self.verifier.as_str())
+                        && receipt.pointer("/outcome/status/SuccessValue").is_some()
+                        && receipt
+                            .pointer("/outcome/logs")
+                            .and_then(Value::as_array)
+                            .is_some_and(|logs| {
+                                logs.iter()
+                                    .any(|log| log.as_str().is_some_and(|l| l.contains(needle)))
+                            })
                 })
             });
         Ok(logged)
@@ -350,7 +411,17 @@ impl NearBridge {
         })?;
 
         if let Some(failure) = outcome.pointer("/status/Failure") {
-            return Err(NearError::Rejected(failure.to_string()));
+            // Behind a contract the last failure only says a call failed; the
+            // first one holds the reason.
+            let first = outcome
+                .get("receipts_outcome")
+                .and_then(Value::as_array)
+                .and_then(|receipts| {
+                    receipts
+                        .iter()
+                        .find_map(|receipt| receipt.pointer("/outcome/status/Failure"))
+                });
+            return Err(NearError::Rejected(first.unwrap_or(failure).to_string()));
         }
         outcome
             .pointer("/transaction/hash")
@@ -561,6 +632,183 @@ mod tests {
         assert_eq!(nonce, 42);
     }
 
+    fn gateway_fee() -> GatewayFee {
+        GatewayFee {
+            to: AccountId::try_from("rewards.test").unwrap(),
+            token: "nep141:usdc.test".into(),
+            amount: 10_000,
+        }
+    }
+
+    fn paying_pair() -> [MultiPayload; 2] {
+        let verifier = AccountId::try_from("verifier.test").unwrap();
+        let diff: cabal_near::TokenDiff =
+            [("nep141:usdc.test".to_owned(), 1)].into_iter().collect();
+        let sign = |seed| {
+            cabal_near::token_diff_payload(
+                &NearKeypair::from_secret_bytes(&[seed; 32]),
+                &verifier,
+                &diff,
+                Some(&gateway_fee()),
+                1_000,
+                [0; 32],
+            )
+        };
+        [sign(2), sign(3)]
+    }
+
+    fn sent_to(rpc: &MockRpc) -> String {
+        let calls = rpc.calls.lock().unwrap();
+        let (_, params) = calls
+            .iter()
+            .find(|(method, _)| method == "send_tx")
+            .unwrap();
+        let tx = STANDARD
+            .decode(params["signed_tx_base64"].as_str().unwrap())
+            .unwrap();
+        String::from_utf8_lossy(&tx).into_owned()
+    }
+
+    #[tokio::test]
+    async fn a_pair_paying_the_fee_goes_through_the_rewards_contract() {
+        let rpc = MockRpc::serve(|method, params| {
+            healthy(method, params, |view| {
+                (view == "config").then(|| json!({ "fee_per_side": "10000" }))
+            })
+        })
+        .await;
+        let bridge = bridge(&rpc.url).with_gateway_fee(Some(gateway_fee()));
+        bridge.submit_pair(&paying_pair()).await.unwrap();
+
+        let text = sent_to(&rpc);
+        assert!(
+            text.contains("rewards.test"),
+            "the gateway calls the rewards contract"
+        );
+        assert!(text.contains("submit"));
+        assert!(text.contains(r#""payloads""#));
+        let order = rpc.order();
+        assert!(
+            order.contains(&"simulate_intents".to_owned()),
+            "a doomed pair still costs no gas: {order:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pair_goes_straight_to_the_verifier_when_no_fee_is_configured() {
+        let rpc = MockRpc::serve(|method, params| healthy(method, params, |_| None)).await;
+        bridge(&rpc.url).submit_pair(&paying_pair()).await.unwrap();
+        assert!(sent_to(&rpc).contains("execute_intents"));
+    }
+
+    /// A half signed by a build with no fee: the contract would refuse this pair.
+    #[tokio::test]
+    async fn a_pair_where_one_side_pays_no_fee_goes_straight_to_the_verifier() {
+        let rpc = MockRpc::serve(|method, params| healthy(method, params, |_| None)).await;
+        let [paying, _] = paying_pair();
+        let bridge = bridge(&rpc.url).with_gateway_fee(Some(gateway_fee()));
+        bridge.submit_pair(&[paying, payload()]).await.unwrap();
+        assert!(sent_to(&rpc).contains("execute_intents"));
+    }
+
+    #[tokio::test]
+    async fn a_rewards_contract_that_is_not_deployed_falls_back_to_the_verifier() {
+        for reply in [
+            json!({ "error": "wasm execution failed with error: CodeDoesNotExist" }),
+            json!({ "error": "account rewards.test does not exist while viewing" }),
+        ] {
+            let rpc = MockRpc::serve(move |method, params| {
+                if params["method_name"] == "config" {
+                    result(reply.clone())
+                } else {
+                    healthy(method, params, |_| None)
+                }
+            })
+            .await;
+            let bridge = bridge(&rpc.url).with_gateway_fee(Some(gateway_fee()));
+            bridge.submit_pair(&paying_pair()).await.unwrap();
+            assert!(sent_to(&rpc).contains("execute_intents"));
+        }
+    }
+
+    /// An unreachable node says nothing about the contract, so the pair waits
+    /// rather than going out unpaid.
+    #[tokio::test]
+    async fn a_failed_check_of_the_rewards_contract_sends_nothing() {
+        let rpc = MockRpc::serve(|method, params| {
+            if params["method_name"] == "config" {
+                json!({ "jsonrpc": "2.0", "id": "x", "error": { "message": "node is syncing" } })
+            } else {
+                healthy(method, params, |_| None)
+            }
+        })
+        .await;
+        let bridge = bridge(&rpc.url).with_gateway_fee(Some(gateway_fee()));
+        assert!(matches!(
+            bridge.submit_pair(&paying_pair()).await,
+            Err(NearError::Rpc(_))
+        ));
+        assert!(!rpc.order().contains(&"send_tx".to_owned()));
+    }
+
+    /// The contract's callback fails last, and says only that the verifier
+    /// refused. The reason that decides what happens next is earlier.
+    #[tokio::test]
+    async fn a_rejection_behind_the_rewards_contract_keeps_the_verifiers_reason() {
+        let rpc = MockRpc::serve(|method, params| {
+            if method == "send_tx" {
+                result(json!({
+                    "status": { "Failure": { "ActionError": "the verifier rejected the pair" } },
+                    "transaction": { "hash": "TXHASH" },
+                    "receipts_outcome": [
+                        { "outcome": { "status": { "SuccessValue": "" }, "logs": [] } },
+                        { "outcome": { "status": { "Failure": { "ActionError": "nonce was already used" } }, "logs": [] } },
+                        { "outcome": { "status": { "Failure": { "ActionError": "the verifier rejected the pair" } }, "logs": [] } },
+                    ],
+                }))
+            } else {
+                healthy(method, params, |view| (view == "config").then(|| json!({})))
+            }
+        })
+        .await;
+        let bridge = bridge(&rpc.url).with_gateway_fee(Some(gateway_fee()));
+        let error = bridge.submit_pair(&paying_pair()).await.unwrap_err();
+        assert!(error.is_already_settled(), "{error:?}");
+    }
+
+    /// Behind the rewards contract the transaction's receiver is not the
+    /// verifier. What proves a settlement is a receipt the verifier itself ran.
+    #[tokio::test]
+    async fn a_report_is_proved_by_the_verifiers_own_receipt() {
+        let log = json!(["EVENT_JSON:{\"intent_hash\":\"MYHASH\"}"]);
+        let tx = move |executor: &str, status: Value| {
+            result(json!({
+                "status": { "SuccessValue": "" },
+                "transaction": { "receiver_id": "rewards.test" },
+                "receipts_outcome": [{ "outcome": { "executor_id": executor, "status": status, "logs": log.clone() } }],
+            }))
+        };
+        let rpc = MockRpc::serve(move |_, params| match params["tx_hash"].as_str() {
+            Some("THROUGH_REWARDS") => tx("verifier.test", json!({ "SuccessValue": "" })),
+            Some("FORGED_LOG") => tx("hostile.test", json!({ "SuccessValue": "" })),
+            _ => tx("verifier.test", json!({ "Failure": {} })),
+        })
+        .await;
+        let bridge = bridge(&rpc.url);
+        assert!(bridge
+            .tx_logged("THROUGH_REWARDS", "gw", "MYHASH")
+            .await
+            .unwrap());
+        assert!(!bridge
+            .tx_logged("FORGED_LOG", "gw", "MYHASH")
+            .await
+            .unwrap());
+        assert!(!bridge
+            .tx_logged("FAILED_RECEIPT", "gw", "MYHASH")
+            .await
+            .unwrap());
+    }
+
     #[tokio::test]
     async fn execute_intents_simulates_first() {
         let rpc = MockRpc::serve(|method, params| {
@@ -662,12 +910,13 @@ mod tests {
     #[tokio::test]
     async fn a_reported_transaction_must_be_a_verifier_call_that_logged_the_hash() {
         let rpc = MockRpc::serve(|_, params| {
-            let receiver = if params["tx_hash"] == "ELSEWHERE" { "other.test" } else { "verifier.test" };
+            let executor = if params["tx_hash"] == "ELSEWHERE" { "other.test" } else { "verifier.test" };
             let status = if params["tx_hash"] == "FAILED" { json!({ "Failure": {} }) } else { json!({ "SuccessValue": "" }) };
             result(json!({
                 "status": status,
-                "transaction": { "receiver_id": receiver },
-                "receipts_outcome": [{ "outcome": { "logs": ["EVENT_JSON:{\"intent_hash\":\"MYHASH\"}"] } }],
+                "receipts_outcome": [{
+                    "outcome": { "executor_id": executor, "status": status, "logs": ["EVENT_JSON:{\"intent_hash\":\"MYHASH\"}"] },
+                }],
             }))
         })
         .await;
