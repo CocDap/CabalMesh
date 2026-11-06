@@ -2643,12 +2643,20 @@ pub async fn vault_import_key(
     private_key_hex: String,
     alias: String,
     emoji: String,
+    account_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
     let services = state.services()?;
+    let account = if let Some(name) = account_id.filter(|value| !value.trim().is_empty()) {
+        let mut secret = zeroize::Zeroizing::new([0u8; 32]);
+        hex::decode_to_slice(private_key_hex.trim(), secret.as_mut()).map_err(|_| AppError::VaultLocked)?;
+        let key = cabal_near::NearKeypair::from_secret_bytes(&secret);
+        Some(crate::wallet_setup::verify_imported_account(services.http.clone(), &crate::network_config::NetworkConfig::current(), name.trim(), &key)
+            .await.map_err(|_| AppError::InvalidIntent { field: "account", reason: crate::error::InvalidReason::Malformed })?)
+    } else { None };
     let mut identity = services.identity.lock().await;
     identity
-        .import_identity(private_key_hex, alias, emoji)
+        .import_identity_with_testnet_account(private_key_hex, alias, emoji, account)
         .map(|_| ())
         .map_err(|_| AppError::VaultLocked)
 }

@@ -486,6 +486,7 @@ function ImportKey() {
   const [confirming, setConfirming] = useState(false);
   const [privateKey, setPrivateKey] = useState("");
   const [alias, setAlias] = useState("");
+  const [accountId, setAccountId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -494,9 +495,10 @@ function ImportKey() {
     setBusy(true);
     setError(null);
     try {
-      await invoke("vault_import_key", { privateKeyHex: privateKey, alias: alias || "Imported Fox", emoji: "🦊" });
+      await invoke("vault_import_key", { privateKeyHex: privateKey, alias: alias || "Imported Fox", emoji: "🦊", accountId: accountId || null });
       setPrivateKey("");
       setAlias("");
+      setAccountId("");
       setConfirming(false);
       setDone(true);
     } catch (failure) {
@@ -548,6 +550,12 @@ function ImportKey() {
               setConfirming(false);
             }}
           />
+        </Field>
+        <Field label="TESTNET ACCOUNT (IF NAMED)" htmlFor="import-account">
+          <Input id="import-account" placeholder="your-name.testnet" autoCapitalize="none" autoComplete="off" spellCheck={false} value={accountId} onChange={(event) => {
+            setAccountId((event.target as HTMLInputElement).value.toLowerCase());
+            setConfirming(false);
+          }} />
         </Field>
         <Field label="ALIAS (OPTIONAL)" htmlFor="import-alias" error={error ?? undefined}>
           <Input

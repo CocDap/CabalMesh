@@ -46,3 +46,6 @@ vault_identities
 vault_import_key
 vault_keys
 vault_refresh_balance
+wallet_check_name
+wallet_create_testnet_account
+wallet_setup_status

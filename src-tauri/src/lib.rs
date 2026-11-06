@@ -12,6 +12,7 @@ mod negotiation;
 // public API whether or not Rust says so. `tests/ipc_contract.rs` pins them.
 pub mod balances;
 pub mod identity;
+pub mod wallet_setup;
 pub mod mesh;
 
 /// JSON-RPC to NEAR. See src/near_bridge.rs.
@@ -487,6 +488,9 @@ pub fn run() {
             commands::vault_refresh_balance,
             commands::vault_address,
             commands::near_account,
+            wallet_setup::wallet_setup_status,
+            wallet_setup::wallet_check_name,
+            wallet_setup::wallet_create_testnet_account,
             commands::near_deposit,
             commands::near_withdraw,
             commands::vault_identities,

@@ -7,7 +7,7 @@ import { Button, Logo } from "../ds";
  * full stops. "ZERO IDENTITY. PRIVATE INTENTS." is three statements, not a
  * tagline to be softened.
  */
-export function Splash({ onEnter }: { onEnter: () => void }) {
+export function Splash({ onEnter, entering = false, error }: { onEnter: () => void; entering?: boolean; error?: string | null }) {
   return (
     <section
       style={{
@@ -64,12 +64,13 @@ export function Splash({ onEnter }: { onEnter: () => void }) {
           marginTop: "var(--space-8)",
         }}
       >
-        <Button tone="primary" size="lg" block className="cm-touch" onClick={onEnter}>
-          ENTER THE MESH
+        <Button tone="primary" size="lg" block className="cm-touch" disabled={entering} onClick={onEnter}>
+          {entering ? "LOADING WALLET…" : "ENTER THE MESH"}
         </Button>
-        <Button tone="ghost" size="lg" block className="cm-touch" onClick={onEnter}>
-          CREATE ANONYMOUS NODE
+        <Button tone="ghost" size="lg" block className="cm-touch" disabled={entering} onClick={onEnter}>
+          SET UP WALLET
         </Button>
+        {error && <p role="alert" style={{ color: "var(--accent-blood-red)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>{error}</p>}
       </div>
 
       <p

@@ -1,7 +1,7 @@
 //! The encrypted identity vault: who this device is on NEAR.
 //!
-//! An identity is a random ed25519 key, and its account is the hex of the
-//! public key. Nothing here talks to a chain; `near_bridge` does that, built on
+//! An identity is a random ed25519 key, optionally bound to a verified named
+//! testnet account. Nothing here talks to a chain; `near_bridge` does that, built on
 //! demand from [`IdentityStore::primary_keypair`] because the vault may still
 //! be locked at startup.
 
@@ -11,7 +11,7 @@ use cabal_vault::{Secret, Vault};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IdentityRecord {
@@ -28,11 +28,28 @@ pub struct IdentityRecord {
     /// [`IdentityStore::ensure_near_keys`] fills it in.
     #[serde(default)]
     pub near_secret: Option<Secret>,
+    /// Missing on pre-onboarding wallets: those identities are preserved as-is.
+    #[serde(default)]
+    pub wallet_setup_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub testnet_account: Option<AccountId>,
+    /// Saved before asking the helper, so a timeout/restart retries the same name and key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_testnet_account: Option<AccountId>,
 }
 
 impl IdentityRecord {
     fn keypair(&self) -> Option<NearKeypair> {
-        parse_near_secret(self.near_secret.as_ref()?.expose()).map(|bytes| NearKeypair::from_secret_bytes(&bytes))
+        self.keypair_for(crate::network_config::NetworkConfig::current().network)
+    }
+
+    fn keypair_for(&self, network: crate::network_config::Network) -> Option<NearKeypair> {
+        let bytes = parse_near_secret(self.near_secret.as_ref()?.expose())?;
+        let key = NearKeypair::from_secret_bytes(&bytes);
+        Some(match (&self.testnet_account, network) {
+            (Some(account), crate::network_config::Network::Testnet) => key.with_account_id(account.clone()),
+            _ => key,
+        })
     }
 }
 
@@ -45,7 +62,7 @@ fn parse_near_secret(hex_secret: &str) -> Option<[u8; 32]> {
 pub struct IdentityView {
     pub alias: String,
     pub emoji: String,
-    /// The NEAR implicit account id.
+    /// The selected named or implicit NEAR account id.
     pub address: String,
 }
 
@@ -74,7 +91,10 @@ pub struct IdentityStore {
 
 impl IdentityStore {
     pub fn new() -> Self {
-        let app_dir = crate::app_paths::data_dir();
+        Self::open(&crate::app_paths::data_dir())
+    }
+
+    pub(crate) fn open(app_dir: &Path) -> Self {
         let vault_path = app_dir.join("vault.enc");
         let vault_key_path = app_dir.join("vault.key");
         let vault_salt_path = app_dir.join("vault.salt");
@@ -355,13 +375,16 @@ impl IdentityStore {
 
     /// Where the pre-encryption wallet lived. Only used to migrate away from.
     fn plaintext_identity_path(&self) -> PathBuf {
-        crate::app_paths::in_data_dir("identities.json")
+        self.vault_path.with_file_name("identities.json")
     }
 
     pub fn generate_new_identity(&mut self, alias: String, emoji: String) -> Result<Vec<IdentityView>, Box<dyn Error>> {
         tracing::info!("🆕 Generating NEW Identity '{}' [{}]...", alias, emoji);
         let near_secret = Some(hex::encode(NearKeypair::generate().secret_bytes()).into());
-        self.identities.push(IdentityRecord { alias, emoji, near_secret });
+        self.identities.push(IdentityRecord {
+            alias, emoji, near_secret, wallet_setup_required: true,
+            testnet_account: None, pending_testnet_account: None,
+        });
         self.save_identities()?;
         self.get_identity_views()
     }
@@ -385,6 +408,7 @@ impl IdentityStore {
     /// vec and generating a brand-new identity to take its place, not just
     /// clearing state and leaving no signer at all.
     pub fn logout_identity(&mut self) -> Result<Vec<IdentityView>, Box<dyn Error>> {
+        self.ensure_no_pending_registration()?;
         self.identities.clear();
         self.generate_new_identity("Genesis Fox".to_string(), "🦊".to_string())
     }
@@ -397,15 +421,29 @@ impl IdentityStore {
         alias: String,
         emoji: String,
     ) -> Result<Vec<IdentityView>, Box<dyn Error>> {
+        self.import_identity_with_testnet_account(near_secret_hex, alias, emoji, None)
+    }
+
+    /// Caller verifies a named account's full-access key before importing its binding.
+    pub(crate) fn import_identity_with_testnet_account(
+        &mut self, near_secret_hex: String, alias: String, emoji: String, account: Option<AccountId>,
+    ) -> Result<Vec<IdentityView>, Box<dyn Error>> {
+        self.ensure_no_pending_registration()?;
         let normalized = near_secret_hex.trim().to_ascii_lowercase();
         parse_near_secret(&normalized).ok_or("a NEAR key is 64 hex characters with no 0x prefix")?;
-
+        let previous = self.identities.clone();
         self.identities = vec![IdentityRecord {
             alias,
             emoji,
             near_secret: Some(normalized.into()),
+            wallet_setup_required: false,
+            testnet_account: account,
+            pending_testnet_account: None,
         }];
-        self.save_identities()?;
+        if let Err(error) = self.save_identities() {
+            self.identities = previous;
+            return Err(error);
+        }
         self.get_identity_views()
     }
 
@@ -416,7 +454,9 @@ impl IdentityStore {
     pub fn exported_keys(&self) -> Option<String> {
         let identity = self.identities.first()?;
         let near = identity.near_secret.as_ref()?;
-        Some(format!("NEAR KEY: {}", near.expose()))
+        let account = self.primary_account()?;
+        let testnet = identity.testnet_account.as_ref().map(|id| format!("\nNEAR TESTNET ACCOUNT: {id}")).unwrap_or_default();
+        Some(format!("NEAR ACCOUNT: {account}{testnet}\nNEAR KEY: {}", near.expose()))
     }
 
     /// The signing key, or `None` while the vault is locked.
@@ -430,6 +470,46 @@ impl IdentityStore {
     pub fn primary_account(&self) -> Option<AccountId> {
         Some(self.primary_keypair()?.account_id())
     }
+
+    fn ensure_no_pending_registration(&self) -> Result<(), Box<dyn Error>> {
+        if self.identities.first().is_some_and(|record| record.pending_testnet_account.is_some()) {
+            return Err("finish pending wallet setup before replacing this key".into());
+        }
+        Ok(())
+    }
+
+    /// Persist registration state without replacing the signing key or other identities.
+    /// On disk failure the in-memory record is restored too.
+    pub fn set_testnet_registration(&mut self, account: AccountId, complete: bool) -> Result<(), Box<dyn Error>> {
+        let previous = self.identities.first().ok_or("identity unavailable")?.clone();
+        if previous.pending_testnet_account.as_ref().is_some_and(|pending| pending != &account)
+            || previous.testnet_account.as_ref().is_some_and(|current| current != &account) {
+            return Err("another named account is already selected".into());
+        }
+        let record = self.identities.first_mut().ok_or("identity unavailable")?;
+        if complete {
+            record.testnet_account = Some(account);
+            record.pending_testnet_account = None;
+            record.wallet_setup_required = false;
+        } else {
+            record.pending_testnet_account = Some(account);
+        }
+        if let Err(error) = self.save_identities() {
+            self.identities[0] = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn clear_pending_testnet_registration(&mut self) -> Result<(), Box<dyn Error>> {
+        let previous = self.identities.first().ok_or("identity unavailable")?.clone();
+        self.identities[0].pending_testnet_account = None;
+        if let Err(error) = self.save_identities() {
+            self.identities[0] = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
 }
 
 impl Default for IdentityStore {
@@ -441,6 +521,65 @@ impl Default for IdentityStore {
 #[cfg(test)]
 mod security_tests {
     use super::*;
+
+    #[test]
+    fn named_setup_preserves_the_key_and_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut identity = IdentityStore::open(dir.path());
+        assert!(identity.identities[0].wallet_setup_required);
+        let original = identity.primary_keypair().unwrap().public_key_bytes();
+        let name = AccountId::try_from("alice.testnet").unwrap();
+        identity.set_testnet_registration(name.clone(), false).unwrap();
+        assert!(identity.set_testnet_registration(AccountId::try_from("other.testnet").unwrap(), false).is_err());
+        let mut restarted = IdentityStore::open(dir.path());
+        assert_eq!(restarted.identities[0].pending_testnet_account, Some(name.clone()));
+        assert!(restarted.import_identity("01".repeat(32), "Other".into(), "".into()).is_err());
+        restarted.set_testnet_registration(name.clone(), true).unwrap();
+        let final_store = IdentityStore::open(dir.path());
+        let record = &final_store.identities[0];
+        assert!(!record.wallet_setup_required);
+        assert!(record.pending_testnet_account.is_none());
+        assert_eq!(record.keypair_for(crate::network_config::Network::Testnet).unwrap().account_id(), name);
+        assert_eq!(record.keypair_for(crate::network_config::Network::Mainnet).unwrap().public_key_bytes(), original);
+        assert_ne!(record.keypair_for(crate::network_config::Network::Mainnet).unwrap().account_id(), name);
+        assert_eq!(record.keypair_for(crate::network_config::Network::Testnet).unwrap().public_key_bytes(), original);
+    }
+
+    #[test]
+    fn pre_onboarding_records_do_not_force_a_wallet_replacement() {
+        let record: IdentityRecord = serde_json::from_value(serde_json::json!({
+            "alias": "Original", "emoji": "", "near_secret": "01".repeat(32),
+        })).unwrap();
+        assert!(!record.wallet_setup_required);
+        assert!(record.testnet_account.is_none());
+        assert!(record.pending_testnet_account.is_none());
+    }
+
+    #[test]
+    fn imported_named_account_is_saved_with_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut identity = IdentityStore::open(dir.path());
+        let account = AccountId::try_from("restored.testnet").unwrap();
+        identity.import_identity_with_testnet_account("07".repeat(32), "Restored".into(), "".into(), Some(account.clone())).unwrap();
+        let restored = IdentityStore::open(dir.path());
+        assert_eq!(restored.identities[0].testnet_account, Some(account));
+        assert!(!restored.identities[0].wallet_setup_required);
+        assert_eq!(restored.primary_keypair().unwrap().public_key_bytes(), NearKeypair::from_secret_bytes(&[7; 32]).public_key_bytes());
+    }
+
+    #[test]
+    fn failed_registration_write_does_not_change_the_active_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut identity = IdentityStore::open(dir.path());
+        let before = identity.primary_account();
+        let impossible = dir.path().join("directory");
+        fs::create_dir(&impossible).unwrap();
+        identity.identity_vault = Vault::new(impossible, Box::new(crate::vault_key::platform_provider(dir.path().join("vault.key"))));
+        assert!(identity.set_testnet_registration(AccountId::try_from("alice.testnet").unwrap(), true).is_err());
+        assert_eq!(identity.primary_account(), before);
+        assert!(identity.identities[0].wallet_setup_required);
+        assert!(identity.identities[0].testnet_account.is_none());
+    }
 
     /// Builds a bridge exactly as `IdentityStore::new` does, but scoped to
     /// `tmp_dir` instead of the real app directory — so calling this twice

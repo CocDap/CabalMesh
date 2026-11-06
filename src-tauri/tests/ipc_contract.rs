@@ -277,6 +277,9 @@ fn command_inventory() {
         "list_nearby_nodes",
         "mesh_snapshot",
         "near_account",
+        "wallet_setup_status",
+        "wallet_check_name",
+        "wallet_create_testnet_account",
         "near_deposit",
         "near_withdraw",
         "llm_get_settings",
@@ -306,6 +309,6 @@ fn command_inventory() {
         "vault_keys",
     ];
     commands.sort_unstable();
-    assert_eq!(commands.len(), 44, "command count changed");
+    assert_eq!(commands.len(), 47, "command count changed");
     insta::assert_snapshot!(commands.join("\n"));
 }

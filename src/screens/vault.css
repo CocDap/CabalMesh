@@ -8,6 +8,7 @@
 }
 
 .vault-account { padding: var(--space-6); }
+.vault-setup-action { min-height: 48px; margin-top: var(--space-4); color: var(--text-secondary) !important; }
 .vault-account-network { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4); margin-bottom: var(--space-5); font-size: var(--text-xs); color: var(--text-primary); }
 .vault-caption { display: block; font-size: var(--text-2xs); letter-spacing: var(--tracking-wide); color: var(--vault-label-color); }
 .vault-public-value { display: flex; align-items: center; gap: var(--space-5); min-width: 0; }

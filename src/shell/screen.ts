@@ -18,6 +18,7 @@ export type VaultTab = "ASSETS" | "IDENTITIES" | "KEYS";
 export type Screen =
   | { name: "splash" }
   | { name: "unlock" }
+  | { name: "wallet_setup" }
   | { name: "home" }
   | { name: "intents"; tab: IntentTab }
   | { name: "new" }
@@ -57,6 +58,7 @@ export function back(screen: Screen): Screen {
   switch (screen.name) {
     case "splash":
     case "unlock":
+    case "wallet_setup":
     case "home":
       return screen;
     case "intents":
@@ -89,13 +91,14 @@ export function activeTab(screen: Screen): TabKey | null {
       return "profile";
     case "splash":
     case "unlock":
+    case "wallet_setup":
       return null;
   }
 }
 
-/** Splash and unlock are full-bleed: no header, no tab bar. */
+/** Splash, unlock and first-run wallet setup have no header or tab bar. */
 export function hasChrome(screen: Screen): boolean {
-  return screen.name !== "splash" && screen.name !== "unlock";
+  return screen.name !== "splash" && screen.name !== "unlock" && screen.name !== "wallet_setup";
 }
 
 /** Header title per screen, matching the prototype. */
@@ -119,6 +122,7 @@ export function title(screen: Screen): string {
       return "PROFILE";
     case "splash":
     case "unlock":
+    case "wallet_setup":
       return "";
   }
 }

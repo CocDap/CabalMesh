@@ -1,4 +1,4 @@
-//! Implicit-account keys: the account id is the hex of the ed25519 public key.
+//! NEAR signing keys, with either an implicit or verified named account.
 
 use ed25519_dalek::{Signer, SigningKey};
 use rand::RngCore;
@@ -68,7 +68,10 @@ impl TryFrom<String> for AccountId {
 
 /// A device's NEAR key. Zeroized on drop by `SigningKey` itself.
 #[derive(Clone)]
-pub struct NearKeypair(SigningKey);
+pub struct NearKeypair {
+    key: SigningKey,
+    account: Option<AccountId>,
+}
 
 impl NearKeypair {
     /// A new random key.
@@ -83,23 +86,30 @@ impl NearKeypair {
 
     #[must_use]
     pub fn from_secret_bytes(secret: &[u8; 32]) -> Self {
-        Self(SigningKey::from_bytes(secret))
+        Self { key: SigningKey::from_bytes(secret), account: None }
     }
 
     #[must_use]
     pub fn secret_bytes(&self) -> [u8; 32] {
-        self.0.to_bytes()
+        self.key.to_bytes()
     }
 
     #[must_use]
     pub fn public_key_bytes(&self) -> [u8; 32] {
-        self.0.verifying_key().to_bytes()
+        self.key.verifying_key().to_bytes()
     }
 
-    /// The implicit account: lowercase hex of the 32-byte public key.
+    /// Bind this key to a named account after its on-chain access key is verified.
+    #[must_use]
+    pub fn with_account_id(mut self, account: AccountId) -> Self {
+        self.account = Some(account);
+        self
+    }
+
+    /// The verified account, or lowercase hex of the public key for implicit accounts.
     #[must_use]
     pub fn account_id(&self) -> AccountId {
-        AccountId(hex::encode(self.public_key_bytes()))
+        self.account.clone().unwrap_or_else(|| AccountId(hex::encode(self.public_key_bytes())))
     }
 
     /// `ed25519:<base58>`.
@@ -109,7 +119,7 @@ impl NearKeypair {
     }
 
     pub(crate) fn sign(&self, message: &[u8]) -> [u8; 64] {
-        self.0.sign(message).to_bytes()
+        self.key.sign(message).to_bytes()
     }
 }
 

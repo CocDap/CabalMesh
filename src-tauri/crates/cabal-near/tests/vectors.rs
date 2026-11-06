@@ -53,6 +53,29 @@ fn implicit_account_matches_fixture() {
 }
 
 #[test]
+fn named_account_signer_keeps_its_public_key_and_signs_the_named_id() {
+    let original = NearKeypair::from_secret_bytes(&[7; 32]);
+    let named = original.clone().with_account_id(AccountId::try_from("alice.testnet").unwrap());
+    assert_eq!(named.public_key_bytes(), original.public_key_bytes());
+    assert_eq!(named.account_id().as_str(), "alice.testnet");
+    let payload = token_diff_payload(
+        &named,
+        &AccountId::try_from("verifier.testnet").unwrap(),
+        &TokenDiff::from_iter([("nep141:usdc.testnet".to_owned(), -1)]),
+        None,
+        1_900_000_000_000,
+        [1; 32],
+    );
+    assert_eq!(payload.signer_id().unwrap(), "alice.testnet");
+    assert!(verify(&payload));
+    let tx = sign_function_calls(&named, &AccountId::try_from("verifier.testnet").unwrap(), 1, [0; 32], &[]);
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(tx).unwrap();
+    let len = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+    assert_eq!(&bytes[4..4 + len], b"alice.testnet");
+}
+
+#[test]
 fn debug_never_prints_the_secret() {
     let f = fixture("keypair.json");
     let printed = format!("{:?}", keypair_of(&f));

@@ -5,6 +5,7 @@ import { errorCopy } from "../state/errorCopy";
 import { transferAmountError } from "../state/vaultTransfer";
 import type { NearAccountView, NearTokenView } from "../types/bindings";
 import "./vault.css";
+import { WalletSetup } from "./WalletSetup";
 
 type TransferMode = "deposit" | "withdraw";
 
@@ -15,6 +16,7 @@ export function VaultAssets() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<TransferMode | null>(null);
+  const [settingUp, setSettingUp] = useState(false);
   const actionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -58,6 +60,12 @@ export function VaultAssets() {
     requestAnimationFrame(() => actionRef.current?.querySelector<HTMLButtonElement>(`[data-action="${previous}"]`)?.focus());
   }
 
+  if (settingUp) return <div className="vault-assets"><WalletSetup onCancel={() => setSettingUp(false)} onComplete={() => {
+    setSettingUp(false);
+    setError(null);
+    void invoke<NearAccountView>("near_account").then(setAccount).catch((failure) => setError(errorCopy(failure)));
+  }} /></div>;
+
   return (
     <div className="vault-assets">
       {!mode && <Panel label="ACCOUNT" pad={false}>
@@ -68,6 +76,9 @@ export function VaultAssets() {
           </div>
           {account ? <PublicValue value={account.accountId} label="account ID" /> : (
             <p className="vault-note" role="status">{loading ? "Loading account…" : error}</p>
+          )}
+          {account && /^[a-f0-9]{64}$/.test(account.accountId) && account.network.toLowerCase().includes("testnet") && (
+            <Button className="vault-setup-action" tone="ghost" size="sm" onClick={() => setSettingUp(true)}>SET UP .TESTNET ACCOUNT</Button>
           )}
         </div>
       </Panel>}

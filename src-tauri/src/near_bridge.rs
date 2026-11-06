@@ -102,6 +102,28 @@ impl NearBridge {
         &self.verifier
     }
 
+    /// Named accounts must register their signing key with the Intents verifier.
+    /// Check first so retrying an interrupted setup does not submit it twice.
+    pub async fn register_signing_key(&self) -> Result<(), NearError> {
+        let args = json!({ "account_id": self.account_id(), "public_key": self.keypair.public_key_string() });
+        let registered = self.view(self.verifier.as_str(), "has_public_key", &args).await?;
+        match registered.as_bool() {
+            Some(true) => return Ok(()),
+            Some(false) => {},
+            None => return Err(NearError::Rpc("has_public_key did not return a bool".into())),
+        }
+        self.send(self.verifier.clone(), FunctionCall {
+            method_name: "add_public_key".into(),
+            args: json!({ "public_key": self.keypair.public_key_string() }).to_string().into_bytes(),
+            gas: 100_000_000_000_000,
+            deposit: 1,
+        }).await?;
+        if self.view(self.verifier.as_str(), "has_public_key", &args).await?.as_bool() != Some(true) {
+            return Err(NearError::Rejected("signing key registration was not confirmed".into()));
+        }
+        Ok(())
+    }
+
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, NearError> {
         let body = json!({ "jsonrpc": "2.0", "id": "cabalmesh", "method": method, "params": params });
         let mut attempt = 0;
@@ -556,6 +578,31 @@ mod tests {
             reqwest::Client::new(),
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn named_wallet_registers_its_key_and_confirms_it() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let registered = std::sync::Arc::new(AtomicBool::new(false));
+        let state = registered.clone();
+        let rpc = MockRpc::serve(move |method, params| {
+            if method == "query" && params["method_name"] == "has_public_key" {
+                return super::testing::view_result(&json!(state.load(Ordering::SeqCst)));
+            }
+            if method == "send_tx" { state.store(true, Ordering::SeqCst); }
+            healthy(method, params, |_| None)
+        }).await;
+        let named = NearKeypair::from_secret_bytes(&[7; 32]).with_account_id(AccountId::try_from("alice.testnet").unwrap());
+        let bridge = NearBridge::new(rpc.url.clone(), "verifier.testnet", named, reqwest::Client::new()).unwrap();
+        bridge.register_signing_key().await.unwrap();
+        bridge.register_signing_key().await.unwrap();
+        let calls = rpc.calls.lock().unwrap();
+        let sends: Vec<_> = calls.iter().filter(|(method, _)| method == "send_tx").collect();
+        assert_eq!(sends.len(), 1, "retry must not register an already confirmed key twice");
+        let tx = STANDARD.decode(sends[0].1["signed_tx_base64"].as_str().unwrap()).unwrap();
+        assert!(tx.windows(b"alice.testnet".len()).any(|bytes| bytes == b"alice.testnet"));
+        assert!(tx.windows(b"add_public_key".len()).any(|bytes| bytes == b"add_public_key"));
+        assert!(calls.iter().filter(|(method, params)| method == "query" && params["request_type"] == "view_access_key").all(|(_, params)| params["account_id"] == "alice.testnet"));
     }
 
     fn payload() -> MultiPayload {

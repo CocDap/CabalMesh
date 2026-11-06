@@ -6,13 +6,16 @@
  * raw px and hex values the adherence lint bans, and the brand forbids spring
  * physics outright.
  */
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import "../ds/index";
 import { AppShell } from "../shell/AppShell";
 import { Splash } from "../screens/Splash";
 import { Unlock } from "../screens/Unlock";
+import { WalletSetup } from "../screens/WalletSetup";
+import { walletEntry } from "../state/walletEntry";
+import { walletSetupError } from "../types/wallet";
 import { Home } from "../screens/Home";
 import { Nodes } from "../screens/Nodes";
 import { Intents } from "../screens/Intents";
@@ -23,31 +26,28 @@ import { Vault } from "../screens/Vault";
 import { Profile } from "../screens/Profile";
 import { GuardianApproval } from "../screens/GuardianApproval";
 import type { Screen } from "../shell/screen";
-import type { SecurityStatus } from "../types/bindings";
 
 function App() {
-  // Starts at splash: the app has no session until the user asks for one.
-  // The mesh itself is already joined by the time this renders — bootstrap
-  // does that at process startup, not on a user action — so there is nothing
-  // to wait for between splash and home.
+  // A fresh wallet goes through named-account setup before the main app.
   const [screen, setScreen] = useState<Screen>({ name: "splash" });
+  const [entering, setEntering] = useState(false);
+  const [entryError, setEntryError] = useState<string | null>(null);
+  const entryPending = useRef(false);
 
-  // Every install defaults to passphrase protection being off, so this check
-  // is a no-op for almost everyone — see docs/identity-design.md, decision 1.
-  // It only routes to Unlock when SECURITY has actually been turned on; any
-  // failure (bootstrap still running, command unavailable) falls through to
-  // Home rather than blocking entry, matching the zero-friction default.
   async function enter() {
+    if (entryPending.current) return;
+    entryPending.current = true;
+    setEntering(true);
+    setEntryError(null);
     try {
-      const status = await invoke<SecurityStatus>("security_status");
-      if (status.locked) {
-        setScreen({ name: "unlock" });
-        return;
-      }
-    } catch {
-      // Fall through to Home.
+      const next = await walletEntry(invoke);
+      setScreen(next === "unlock" ? { name: "unlock" } : next === "wallet_setup" ? { name: "wallet_setup" } : { name: "home" });
+    } catch (failure) {
+      setEntryError(walletSetupError(failure));
+    } finally {
+      entryPending.current = false;
+      setEntering(false);
     }
-    setScreen({ name: "home" });
   }
 
   // Mounted regardless of screen: a guardian approval is driven by someone
@@ -56,7 +56,7 @@ function App() {
   if (screen.name === "splash") {
     return (
       <>
-        <Splash onEnter={() => void enter()} />
+        <Splash onEnter={() => void enter()} entering={entering} error={entryError} />
         <GuardianApproval />
       </>
     );
@@ -65,10 +65,14 @@ function App() {
   if (screen.name === "unlock") {
     return (
       <>
-        <Unlock onUnlocked={() => setScreen({ name: "home" })} />
+        <Unlock onUnlocked={() => void enter()} />
         <GuardianApproval />
       </>
     );
+  }
+
+  if (screen.name === "wallet_setup") {
+    return <WalletSetup onComplete={() => setScreen({ name: "vault", tab: "ASSETS" })} onCancel={() => setScreen({ name: "splash" })} />;
   }
 
   return (
