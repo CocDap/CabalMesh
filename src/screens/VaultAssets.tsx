@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button, Field, Input, Panel } from "../ds";
+import { startBalanceSync } from "../state/balanceSync";
 import { errorCopy } from "../state/errorCopy";
 import { transferAmountError } from "../state/vaultTransfer";
 import type { NearAccountView, NearTokenView } from "../types/bindings";
@@ -18,6 +19,7 @@ export function VaultAssets() {
   const [mode, setMode] = useState<TransferMode | null>(null);
   const [settingUp, setSettingUp] = useState(false);
   const actionRef = useRef<HTMLDivElement>(null);
+  const syncing = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,18 +42,37 @@ export function VaultAssets() {
     return () => { cancelled = true; clearTimeout(timer); };
   }, []);
 
+  // near_account only returns the cache, so without this a new account shows no
+  // balances until someone presses REFRESH.
+  const accountId = account?.accountId;
+  const onOverview = !mode && !settingUp;
+  useEffect(() => {
+    if (!accountId || !onOverview) return;
+    return startBalanceSync(() => void syncBalances(true), document);
+  }, [accountId, onOverview]);
+
+  /** One read at a time: REFRESH during a background read waits for that read. */
+  function syncBalances(readChain: boolean) {
+    syncing.current ??= (async () => {
+      try {
+        if (readChain) await invoke("vault_refresh_balance");
+        setAccount(await invoke<NearAccountView>("near_account"));
+        setError(null);
+      } catch (failure) {
+        setError(errorCopy(failure));
+      } finally {
+        syncing.current = null;
+      }
+    })();
+    return syncing.current;
+  }
+
   async function refresh() {
     if (refreshing) return;
     setRefreshing(true);
     setError(null);
-    try {
-      if (account) await invoke("vault_refresh_balance");
-      setAccount(await invoke<NearAccountView>("near_account"));
-    } catch (failure) {
-      setError(errorCopy(failure));
-    } finally {
-      setRefreshing(false);
-    }
+    await syncBalances(account != null);
+    setRefreshing(false);
   }
 
   function closeTransfer() {
