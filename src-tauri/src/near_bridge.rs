@@ -48,8 +48,8 @@ pub enum NearError {
 }
 
 impl NearError {
-    /// Whether the verifier refused because this exact pair was already
-    /// applied, which means another gateway got there first.
+    /// Whether the verifier reports at least one submitted nonce was used.
+    /// This does not identify which half settled, or prove our deal succeeded.
     #[must_use]
     pub fn is_already_settled(&self) -> bool {
         matches!(self, Self::Rejected(reason) if reason.contains("nonce was already used"))
@@ -106,6 +106,14 @@ impl NearBridge {
     #[must_use]
     pub const fn verifier(&self) -> &AccountId {
         &self.verifier
+    }
+
+    /// Only used to recognize a legacy local half written before the book
+    /// recorded provenance. A claimed signer_id alone is not authentication.
+    pub(crate) fn signed_by_self(&self, payload: &MultiPayload) -> bool {
+        payload.public_key == self.keypair.public_key_string()
+            && payload.signer_id().is_ok_and(|signer| signer == self.account_id().as_str())
+            && cabal_near::verify(payload)
     }
 
     /// Named accounts must register their signing key with the Intents verifier.

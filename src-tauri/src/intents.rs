@@ -28,6 +28,8 @@
 //! [`IntentStatus::can_transition_to`] owns the rules. [`Ledger::advance`]
 //! refuses anything it rejects rather than overwriting, so no caller can settle
 //! something that was never broadcast by writing the field directly.
+//! Chain reconciliation has one explicit exception: a signed intent incorrectly
+//! marked SettlementRejected by an older build may be repaired after proof.
 
 use crate::bindings::{LogLine, LogTone};
 use crate::error::AppError;
@@ -237,6 +239,23 @@ impl Ledger {
                 return Err(AppError::InvalidIntent { field: "status", reason: crate::error::InvalidReason::OutOfRange });
             }
             if next.is_terminal() { intent.finished_ms = Some(now_ms); }
+            intent.status = next;
+            Ok(intent.clone())
+        })?.ok_or(AppError::InvalidIntent { field: "id", reason: crate::error::InvalidReason::Missing })
+    }
+
+    /// Chain reconciliation may repair the old pair-level rejection bug.
+    /// Ordinary transitions still cannot leave a terminal state. Only the
+    /// settlement module calls this, after checking our own signed proof.
+    pub(crate) fn confirm_settled(&self, id: &IntentId, proof: cabal_core::ProofHash, filled_at: UsdPrice, elapsed_ms: u32, now_ms: u64) -> Result<Intent, AppError> {
+        let next = IntentStatus::Settled { proof, filled_at, elapsed_ms };
+        self.update(id, |intent| {
+            let repair = matches!(intent.status, IntentStatus::Failed { reason: cabal_core::FailureReason::SettlementRejected })
+                && intent.deal.as_ref().is_some_and(|deal| deal.signed_until_ms.is_some());
+            if !repair && !intent.status.can_transition_to(&next) {
+                return Err(AppError::InvalidIntent { field: "status", reason: crate::error::InvalidReason::OutOfRange });
+            }
+            intent.finished_ms = Some(now_ms);
             intent.status = next;
             Ok(intent.clone())
         })?.ok_or(AppError::InvalidIntent { field: "id", reason: crate::error::InvalidReason::Missing })
@@ -745,5 +764,29 @@ mod tests {
         let saved: Intent = serde_json::from_str(&saved).unwrap();
         assert_eq!(saved.status,IntentStatus::Draft);
         assert!(saved.log.is_empty());
+    }
+
+    #[test]
+    fn chain_repair_is_limited_to_a_signed_legacy_settlement_rejection() {
+        for (status, signed) in [
+            (IntentStatus::Cancelled, true),
+            (IntentStatus::Failed { reason: cabal_core::FailureReason::NoRoute }, true),
+            (IntentStatus::Failed { reason: cabal_core::FailureReason::SettlementRejected }, false),
+            (IntentStatus::Failed { reason: cabal_core::FailureReason::SettlementRejected }, true),
+        ] {
+            let (ledger, _dir) = ledger();
+            let intent = ledger.create(draft(), 1_000).unwrap();
+            ledger.propose_deal(&intent.id, "deal", UsdPrice::from_cents(404), "peer");
+            if signed { assert!(ledger.mark_signed(&intent.id, 9_000)); }
+            ledger.advance(&intent.id, status.clone(), 2_000).unwrap();
+            let result = ledger.confirm_settled(&intent.id, ProofHash::new("verified"), UsdPrice::from_cents(404), 3_000, 4_000);
+            let repairable = signed && matches!(status, IntentStatus::Failed { reason: cabal_core::FailureReason::SettlementRejected });
+            assert_eq!(result.is_ok(), repairable);
+            if !repairable { assert_eq!(ledger.get(&intent.id).unwrap().status, status); }
+            else {
+                assert!(ledger.advance(&intent.id, IntentStatus::Waiting, 5_000).is_err());
+                assert!(ledger.confirm_settled(&intent.id, ProofHash::new("replacement"), UsdPrice::from_cents(404), 3_000, 5_000).is_err());
+            }
+        }
     }
 }

@@ -34,8 +34,8 @@ use std::time::Duration;
 /// no mesh peers would otherwise never be told it can reach the chain.
 pub const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Deals remembered at once. Anyone on the mesh can make this device hold a
-/// signed diff, so it has to have a limit.
+/// Peer-only/closed entries remembered at once. Still-binding local signatures
+/// are retained separately so mesh traffic cannot evict their proof.
 const MAX_DEALS: usize = 256;
 
 /// The two intents of a deal name it, in an order both sides compute alike.
@@ -83,6 +83,9 @@ struct Entry {
     buy: Option<MultiPayload>,
     closed: bool,
     arrived: u64,
+    /// Set only by local signing, never by a message from the mesh.
+    #[serde(default)]
+    own_side: Option<Action>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -149,12 +152,18 @@ impl DiffBook {
             return Ok(None);
         }
         *slot = Some(payload);
+        if replace {
+            entry.own_side = Some(side);
+            entry.closed = false;
+        }
         let pair = match (&entry.sell, &entry.buy) {
             (Some(sell), Some(buy)) if !entry.closed => Some([sell.clone(), buy.clone()]),
             _ => None,
         };
-        while file.deals.len() > MAX_DEALS {
-            let Some(oldest) = file.deals.iter().min_by_key(|(_, entry)| entry.arrived).map(|(id, _)| id.clone()) else {
+        // Peer traffic cannot evict a still-binding local signature/proof.
+        while file.deals.values().filter(|entry| entry.own_side.is_none() || entry.closed).count() > MAX_DEALS {
+            let Some(oldest) = file.deals.iter().filter(|(_, entry)| entry.own_side.is_none() || entry.closed)
+                .min_by_key(|(_, entry)| entry.arrived).map(|(id, _)| id.clone()) else {
                 break;
             };
             file.deals.remove(&oldest);
@@ -192,6 +201,19 @@ impl DiffBook {
         self.release(deal_id);
     }
 
+    fn mark_pair_submitted(&self, deal_id: &str, pair: &[MultiPayload; 2]) {
+        {
+            let mut file = self.file.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(entry) = file.deals.get_mut(deal_id) {
+                if entry.sell.as_ref() == Some(&pair[0]) && entry.buy.as_ref() == Some(&pair[1]) {
+                    entry.closed = true;
+                    self.persist(&file);
+                }
+            }
+        }
+        self.release(deal_id);
+    }
+
     /// Deals with both halves and nothing sent.
     #[must_use]
     pub fn held(&self) -> Vec<String> {
@@ -209,6 +231,31 @@ impl DiffBook {
         let file = self.file.lock().unwrap_or_else(PoisonError::into_inner);
         let entry = file.deals.get(deal_id)?;
         if side == Action::Sell { entry.sell.clone() } else { entry.buy.clone() }
+    }
+
+    fn own_half(&self, deal_id: &str, side: Action) -> Option<MultiPayload> {
+        let file = self.file.lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = file.deals.get(deal_id)?;
+        if entry.own_side != Some(side) { return None; }
+        if side == Action::Sell { entry.sell.clone() } else { entry.buy.clone() }
+    }
+
+    /// Drop only the rejected candidates, preserving our exact local half and
+    /// any replacement that arrived while the RPC was outstanding.
+    fn discard_rejected(&self, deal_id: &str, pair: &[MultiPayload; 2], keep: Option<Action>) {
+        let mut file = self.file.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = file.clone();
+        if let Some(entry) = file.deals.get_mut(deal_id).filter(|entry| !entry.closed) {
+            let keep = entry.own_side.or(keep);
+            if keep != Some(Action::Sell) && entry.sell.as_ref() == Some(&pair[0]) { entry.sell = None; }
+            if keep != Some(Action::Buy) && entry.buy.as_ref() == Some(&pair[1]) { entry.buy = None; }
+        }
+        if let Err(error) = self.store.save(&*file) {
+            *file = before;
+            crate::error::AppError::local_storage(error);
+        }
+        drop(file);
+        self.release(deal_id);
     }
 
     fn first_note(&self, deal_id: &str) -> bool {
@@ -326,35 +373,98 @@ fn intent_of_deal(ledger: &Ledger, deal: &str) -> Option<Intent> {
     ledger.all().into_iter().find(|intent| intent.deal.as_ref().is_some_and(|d| d.id == deal))
 }
 
-/// Holds a diff from the mesh, if it is genuine and for this network. Returns
-/// whether it was held.
-pub fn receive_diff(ledger: &Ledger, book: &DiffBook, chain: Chain, verifier: &str, details: &str) -> bool {
-    let Ok(message) = serde_json::from_str::<SignedDiff>(details) else {
-        return false;
+/// Validates the signed trade, not the unsigned deal/side labels. Gateways
+/// accept only the two configured tokens and the optional configured fee.
+fn trade_diff(payload: &MultiPayload, side: Action, near: &NearConfig, at_ms: Option<u64>) -> Option<BTreeMap<String, i128>> {
+    let message: serde_json::Value = serde_json::from_str(&payload.payload.message).ok()?;
+    AccountId::try_from(message["signer_id"].as_str()?).ok()?;
+    let deadline = chrono::DateTime::parse_from_rfc3339(message["deadline"].as_str()?).ok()?;
+    if at_ms.is_some_and(|now| deadline.timestamp_millis() <= i64::try_from(now).unwrap_or(i64::MAX)) { return None; }
+    let intents = message["intents"].as_array()?;
+    if intents.is_empty() || intents.len() > 2 || intents[0]["intent"] != "token_diff" { return None; }
+    if intents.len() == 2 && !near.gateway_fee().is_some_and(|fee| fee.paid_by(payload)) { return None; }
+    let raw = intents[0]["diff"].as_object()?;
+    if raw.len() != 2 { return None; }
+    let base = near.base.token_id();
+    let quote = near.quote.token_id();
+    let base_delta = raw.get(&base)?.as_str()?.parse::<i128>().ok()?;
+    let quote_delta = raw.get(&quote)?.as_str()?.parse::<i128>().ok()?;
+    let direction = match side {
+        Action::Sell => base_delta < 0 && quote_delta > 0,
+        Action::Buy => base_delta > 0 && quote_delta < 0,
+        _ => false,
     };
-    let side = match message.side.as_str() {
-        "sell" => Action::Sell,
-        "buy" => Action::Buy,
-        _ => return false,
-    };
-    if !message.chain.matches(chain) || message.payload.payload.recipient != verifier {
-        return false;
-    }
-    if !verify(&message.payload) {
-        tracing::warn!(target: "cabalmesh::settlement", deal = %message.deal_id, "dropped a diff with a bad signature");
-        return false;
-    }
+    direction.then(|| BTreeMap::from([(base, base_delta), (quote, quote_delta)]))
+}
 
-    // The signature is the only trustworthy source of who the other side is.
-    if let (Some(own), Ok(signer)) = (intent_of_deal(ledger, &message.deal_id), message.payload.signer_id()) {
-        if own.draft.action != side && own.counterparty.is_none() {
-            ledger.set_counterparty(&own.id, signer);
-            ledger.record(&own.id, line("COUNTERPARTY SIGNED.", LogTone::Ok));
+fn matches_deal(payload: &MultiPayload, side: Action, intent: &Intent) -> bool {
+    matches_deal_at(payload, side, intent, Some(now_ms()))
+}
+
+fn matches_deal_at(payload: &MultiPayload, side: Action, intent: &Intent, at_ms: Option<u64>) -> bool {
+    let Some(terms) = &intent.deal else { return false; };
+    let near = crate::network_config::network_of(intent.draft.chain).near();
+    let Some(actual) = trade_diff(payload, side, &near, at_ms) else { return false; };
+    let Some(quote) = quote_for(&near, intent.draft.amount.raw(), terms.price) else { return false; };
+    let Ok(base) = i128::try_from(intent.draft.amount.raw()) else { return false; };
+    let Ok(quote) = i128::try_from(quote) else { return false; };
+    let expected = if side == Action::Sell { (-base, quote) } else { (base, -quote) };
+    actual.get(&near.base.token_id()) == Some(&expected.0)
+        && actual.get(&near.quote.token_id()) == Some(&expected.1)
+}
+
+fn opposite(side: Action) -> Action {
+    if side == Action::Sell { Action::Buy } else { Action::Sell }
+}
+
+/// Holds a signed candidate only when its contents match its side and, for a
+/// local deal, its agreed terms. A peer can never populate our own signing slot.
+pub fn receive_diff(ledger: &Ledger, book: &DiffBook, chain: Chain, verifier: &str, details: &str) -> bool {
+    let Ok(message) = serde_json::from_str::<SignedDiff>(details) else { return false; };
+    let side = match message.side.as_str() { "sell" => Action::Sell, "buy" => Action::Buy, _ => return false };
+    if !message.chain.matches(chain) || message.payload.payload.recipient != verifier || !verify(&message.payload) { return false; }
+    let near = crate::network_config::network_of(chain).near();
+    let Some(diff) = trade_diff(&message.payload, side, &near, Some(now_ms())) else { return false; };
+    let own = intent_of_deal(ledger, &message.deal_id);
+    if let Some(own) = &own {
+        if !own.draft.chain.matches(chain) || own.draft.action == side || !matches_deal(&message.payload, side, own) { return false; }
+    }
+    if let Some(other) = book.half(&message.deal_id, opposite(side)) {
+        let Some(other) = trade_diff(&other, opposite(side), &near, Some(now_ms())) else { return false; };
+        if !diff.iter().all(|(token, amount)| amount.checked_neg().as_ref() == other.get(token)) { return false; }
+    }
+    book.insert(&message.deal_id, side, message.payload.clone());
+    if book.half(&message.deal_id, side).as_ref() != Some(&message.payload) { return false; }
+    if let Some(own) = own {
+        if let Ok(signer) = message.payload.signer_id() {
+            if own.counterparty.as_deref() != Some(signer.as_str()) {
+                ledger.set_counterparty(&own.id, signer);
+                ledger.record(&own.id, line("COUNTERPARTY SIGNED.", LogTone::Ok));
+            }
         }
     }
-
-    book.insert(&message.deal_id, side, message.payload);
     true
+}
+
+/// Only locally recorded provenance, or an authenticated legacy signature of
+/// the current device, can be used to attribute a chain result to our intent.
+fn owned_half(intent: &Intent, book: &DiffBook, bridge: &NearBridge) -> Option<MultiPayload> {
+    let terms = intent.deal.as_ref()?;
+    let signed_until = terms.signed_until_ms?;
+    let own = book.own_half(&terms.id, intent.draft.action).or_else(|| {
+        book.half(&terms.id, intent.draft.action).filter(|half| {
+            let deadline = serde_json::from_str::<serde_json::Value>(&half.payload.message).ok()
+                .and_then(|message| message["deadline"].as_str().and_then(|deadline| chrono::DateTime::parse_from_rfc3339(deadline).ok()))
+                .and_then(|deadline| u64::try_from(deadline.timestamp_millis()).ok());
+            bridge.signed_by_self(half) && deadline == Some(signed_until)
+                && matches_deal_at(half, intent.draft.action, intent, None)
+        })
+    })?;
+    (own.payload.recipient == bridge.verifier().as_str() && verify(&own)).then_some(own)
+}
+
+fn can_reconcile(intent: &Intent) -> bool {
+    intent.status.is_active() || matches!(intent.status, IntentStatus::Failed { reason: FailureReason::SettlementRejected })
 }
 
 /// Finishes this device's intent for a deal, if it has one.
@@ -365,29 +475,10 @@ fn mark_settled(ledger: &Ledger, deal: &str, tx: &str) {
     let Some(terms) = &intent.deal else {
         return;
     };
-    let elapsed_ms = u32::try_from(intent.elapsed_ms(now_ms())).unwrap_or(u32::MAX);
-    let settled = IntentStatus::Settled {
-        proof: ProofHash::new(tx),
-        filled_at: terms.price,
-        elapsed_ms,
-    };
-    if ledger.advance(&intent.id, settled, now_ms()).is_ok() {
+    let elapsed_ms = u32::try_from(now_ms().saturating_sub(intent.created_ms)).unwrap_or(u32::MAX);
+    if ledger.confirm_settled(&intent.id, ProofHash::new(tx), terms.price, elapsed_ms, now_ms()).is_ok() {
         ledger.record(&intent.id, line(format!("PROOF {tx}"), LogTone::Loud));
     }
-}
-
-/// Fails this device's intent for a deal, if it has one.
-fn mark_failed(ledger: &Ledger, deal: &str, error: &NearError) {
-    let Some(intent) = intent_of_deal(ledger, deal) else {
-        return;
-    };
-    if error.is_invalid_salt() {
-        ledger.record(&intent.id, line("SALT ROTATED, SIGN AGAIN.", LogTone::Err));
-    } else {
-        ledger.record(&intent.id, line("VERIFIER REJECTED THE PAIR.", LogTone::Err));
-    }
-    ledger.record(&intent.id, line("FUNDS REMAIN IN INTENTS BALANCE.", LogTone::Dim));
-    let _ = ledger.advance(&intent.id, IntentStatus::Failed { reason: FailureReason::SettlementRejected }, now_ms());
 }
 
 /// A pair that reached the chain, for flooding.
@@ -400,10 +491,22 @@ pub async fn submit_held(ledger: &Ledger, book: &DiffBook, bridge: &NearBridge) 
         let Some(pair) = book.claim(&deal) else {
             continue;
         };
+        let local = intent_of_deal(ledger, &deal);
+        let own = local.as_ref().and_then(|intent| owned_half(intent, book, bridge));
+        let keep = local.as_ref().filter(|_| own.is_some()).map(|intent| intent.draft.action);
+        if let Some(intent) = &local {
+            let index = usize::from(intent.draft.action == Action::Buy);
+            if own.as_ref() != Some(&pair[index]) || !matches_deal(&pair[1-index], opposite(intent.draft.action), intent) {
+                book.discard_rejected(&deal, &pair, keep);
+                continue;
+            }
+        }
         match bridge.submit_pair(&pair).await {
             Ok(TxHash(tx)) => {
-                book.mark_submitted(&deal);
-                mark_settled(ledger, &deal, &tx);
+                book.mark_pair_submitted(&deal, &pair);
+                // Ownership was established before the RPC. A local deal that
+                // appeared during a gateway submission is unrelated to its result.
+                if local.is_some() { mark_settled(ledger, &deal, &tx); }
                 submitted.push(SettlementComplete {
                     deal_id: deal,
                     tx_hash: tx,
@@ -411,10 +514,11 @@ pub async fn submit_held(ledger: &Ledger, book: &DiffBook, bridge: &NearBridge) 
                 });
             }
             Err(error) if error.is_already_settled() => {
-                // Someone else got there first; their report carries the hash.
-                book.mark_submitted(&deal);
-                if let Some(intent) = intent_of_deal(ledger, &deal) {
-                    ledger.record(&intent.id, line("ANOTHER GATEWAY SUBMITTED FIRST.", LogTone::Dim));
+                // It may be the peer's nonce, not ours. Keep our proof and
+                // reconcile it independently instead of closing the deal.
+                book.discard_rejected(&deal, &pair, keep);
+                if let Some(intent) = &local {
+                    ledger.record(&intent.id, line("A SIGNATURE WAS ALREADY USED. CHECKING OUR SETTLEMENT.", LogTone::Dim));
                 }
             }
             Err(NearError::AccountNotFunded { .. }) => {
@@ -426,9 +530,13 @@ pub async fn submit_held(ledger: &Ledger, book: &DiffBook, bridge: &NearBridge) 
                 }
             }
             Err(error @ NearError::Rejected(_)) => {
-                tracing::warn!(target: "cabalmesh::settlement", %deal, %error, "verifier rejected a pair");
-                book.mark_submitted(&deal);
-                mark_failed(ledger, &deal, &error);
+                tracing::warn!(target: "cabalmesh::settlement", %deal, %error, "verifier rejected a candidate pair");
+                book.discard_rejected(&deal, &pair, keep);
+                if let Some(intent) = &local {
+                    if book.first_note(&deal) {
+                        ledger.record(&intent.id, line("PAIR REJECTED. CHECKING OUR SIGNED INTENT ON CHAIN.", LogTone::Dim));
+                    }
+                }
             }
             Err(error) => {
                 tracing::debug!(target: "cabalmesh::settlement", %deal, %error, "could not submit; holding");
@@ -444,7 +552,7 @@ pub async fn submit_held(ledger: &Ledger, book: &DiffBook, bridge: &NearBridge) 
 pub fn receive_report(ledger: &Ledger, details: &str) -> Option<IntentId> {
     let report = serde_json::from_str::<SettlementComplete>(details).ok()?;
     let intent = intent_of_deal(ledger, &report.deal_id)?;
-    if !matches!(intent.status, IntentStatus::Waiting | IntentStatus::FindingRoute) {
+    if !can_reconcile(&intent) || intent.deal.as_ref()?.signed_until_ms.is_none() {
         return None;
     }
     ledger.set_reported_tx(&intent.id, report.tx_hash, report.gateway);
@@ -456,46 +564,33 @@ pub fn receive_report(ledger: &Ledger, details: &str) -> Option<IntentId> {
 /// when the gateway flooded its report would never hear it again.
 pub async fn confirm_reports(ledger: &Ledger, book: &DiffBook, bridge: &NearBridge) {
     for intent in ledger.all() {
-        let Some(terms) = &intent.deal else {
-            continue;
-        };
-        // Only once signed: before that, the slot may hold a peer's forgery.
-        if terms.signed_until_ms.is_none() || !intent.status.is_active() {
-            continue;
-        }
-        let Some(own) = book.half(&terms.id, intent.draft.action) else {
-            continue;
-        };
-        let Ok(hash) = own.hash() else {
-            continue;
-        };
+        let Some(terms) = &intent.deal else { continue; };
+        if !can_reconcile(&intent) { continue; }
+        let Some(own) = owned_half(&intent, book, bridge) else { continue; };
+        let Ok(hash) = own.hash() else { continue; };
         let needle = bs58::encode(hash).into_string();
-        let Some(reported) = &terms.reported else {
-            let Ok(signer) = own.signer_id() else {
-                continue;
-            };
-            match bridge.nonce_used(&signer, &own.payload.nonce).await {
+        if let Some(reported) = &terms.reported {
+            match bridge.tx_logged(&reported.tx_hash, &reported.gateway, &needle).await {
                 Ok(true) => {
                     book.mark_submitted(&terms.id);
-                    ledger.record(&intent.id, line("ANOTHER GATEWAY SETTLED THIS. PROOF IS YOUR INTENT HASH.", LogTone::Dim));
-                    mark_settled(ledger, &terms.id, &needle);
+                    mark_settled(ledger, &terms.id, &reported.tx_hash);
+                    continue;
                 }
-                Ok(false) => {}
-                Err(error) => tracing::debug!(target: "cabalmesh::settlement", %error, "could not check a nonce"),
+                Ok(false) => ledger.clear_reported_tx(&intent.id),
+                Err(error) => tracing::debug!(target: "cabalmesh::settlement", %error, "could not check a report"),
             }
-            continue;
-        };
-        match bridge.tx_logged(&reported.tx_hash, &reported.gateway, &needle).await {
+        }
+        // An untrusted report (including an unknown hash) must never suppress
+        // reconciliation of our own signature.
+        let Ok(signer) = own.signer_id() else { continue; };
+        match bridge.nonce_used(&signer, &own.payload.nonce).await {
             Ok(true) => {
                 book.mark_submitted(&terms.id);
-                mark_settled(ledger, &terms.id, &reported.tx_hash);
+                ledger.record(&intent.id, line("OUR SIGNED INTENT WAS USED ON CHAIN. PROOF IS ITS INTENT HASH.", LogTone::Dim));
+                mark_settled(ledger, &terms.id, &needle);
             }
-            Ok(false) => {
-                tracing::warn!(target: "cabalmesh::settlement", deal = %terms.id, "a settlement report did not check out");
-                ledger.clear_reported_tx(&intent.id);
-            }
-            // Keep it: no route, or the node has not seen the transaction yet.
-            Err(error) => tracing::debug!(target: "cabalmesh::settlement", %error, "could not check a report"),
+            Ok(false) => {}
+            Err(error) => tracing::debug!(target: "cabalmesh::settlement", %error, "could not check our nonce"),
         }
     }
 }
@@ -827,11 +922,213 @@ mod tests {
         assert_eq!(fx.ledger.get(&id).unwrap().counterparty.as_deref(), Some(signer.as_str()));
     }
 
+    #[test]
+    fn a_peer_cannot_populate_our_signing_slot_or_mislabel_a_side() {
+        let fx = fixture();
+        waiting_intent(&fx, "d", Action::Sell);
+        assert!(!receive_diff(&fx.ledger, &fx.book, Chain::NearTestnet, VERIFIER,
+            &diff_message("d", "sell", half(3, Action::Sell))));
+        assert!(fx.book.half("d", Action::Sell).is_none());
+        assert!(!receive_diff(&fx.ledger, &fx.book, Chain::NearTestnet, VERIFIER,
+            &diff_message("d", "buy", half(3, Action::Sell))));
+        assert!(fx.book.half("d", Action::Buy).is_none());
+    }
+
+    #[test]
+    fn a_signed_candidate_must_match_the_agreed_amount_price_and_tokens() {
+        let fx = fixture();
+        waiting_intent(&fx, "d", Action::Sell);
+        for (amount, quote) in [(WNEAR * 2, 4_040_000), (WNEAR, 4_050_000)] {
+            let payload = sign_half(&NearKeypair::from_secret_bytes(&[3; 32]),
+                &AccountId::try_from(VERIFIER).unwrap(), &near(), Action::Buy,
+                amount, quote, 4_102_444_800_000, [3; 32]);
+            assert!(!receive_diff(&fx.ledger, &fx.book, Chain::NearTestnet, VERIFIER,
+                &diff_message("d", "buy", payload)));
+        }
+        let mut body: serde_json::Value = serde_json::from_str(&half(3, Action::Buy).payload.message).unwrap();
+        body["intents"][0]["diff"]["nep141:fake.testnet"] = json!("1");
+        let extra_token = MultiPayload::sign(&NearKeypair::from_secret_bytes(&[3; 32]), body.to_string(), [3; 32], VERIFIER);
+        assert!(!receive_diff(&fx.ledger, &fx.book, Chain::NearTestnet, VERIFIER,
+            &diff_message("d", "buy", extra_token)));
+        assert!(fx.book.half("d", Action::Buy).is_none());
+    }
+
+    #[test]
+    fn peer_traffic_cannot_evict_our_locally_signed_proof_even_after_restart() {
+        let fx = fixture();
+        let own = half(1, Action::Sell);
+        fx.book.hold_own("own", Action::Sell, own.clone()).unwrap();
+        for index in 0..MAX_DEALS+4 { fx.book.insert(&format!("peer{index}"), Action::Buy, half(3, Action::Buy)); }
+        let reopened = DiffBook::open((*fx.book.store).clone()).unwrap();
+        assert_eq!(reopened.own_half("own", Action::Sell), Some(own));
+        assert!(reopened.own_half("peer4", Action::Buy).is_none());
+    }
+
+    #[tokio::test]
+    async fn an_unrelated_successful_pair_cannot_settle_a_local_intent() {
+        let fx = fixture();
+        let id = waiting_intent(&fx, "d", Action::Sell);
+        // Old persisted peer-only entries have no local-signing provenance.
+        fx.book.insert("d", Action::Sell, half(3, Action::Sell));
+        fx.book.insert("d", Action::Buy, half(4, Action::Buy));
+        let rpc = MockRpc::serve(|method, params| healthy(method, params,
+            |view| (view == "simulate_intents").then(|| json!({})))).await;
+        assert!(submit_held(&fx.ledger, &fx.book, &bridge(&rpc.url)).await.is_empty());
+        assert!(rpc.order().is_empty(), "no unrelated pair should be sent");
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Waiting));
+    }
+
+    #[tokio::test]
+    async fn a_gateway_reply_cannot_close_a_local_half_added_during_submission() {
+        let fx = fixture();
+        let draft = IntentDraft { chain: Chain::NearTestnet, action: Action::Sell,
+            asset: "wNEAR".into(), condition: Condition::Any, amount: TokenAmount::from_raw(WNEAR, 24),
+            mode: ExecutionMode::Shark, privacy: PrivacyLevel::Low };
+        let id = fx.ledger.create(draft, now_ms()).unwrap().id;
+        fx.ledger.advance(&id, IntentStatus::Broadcast { route_len: 1 }, now_ms()).unwrap();
+        fx.book.insert("d", Action::Sell, half(3, Action::Sell));
+        fx.book.insert("d", Action::Buy, half(4, Action::Buy));
+        let ledger = fx.ledger.clone();
+        let book = fx.book.clone();
+        let during = id.clone();
+        let rpc = MockRpc::serve(move |method, params| {
+            if method == "send_tx" {
+                ledger.propose_deal(&during, "d", UsdPrice::from_cents(404), "target");
+                ledger.mark_signed(&during, deadline_from(now_ms()));
+                book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
+                ledger.advance(&during, IntentStatus::Waiting, now_ms()).unwrap();
+            }
+            healthy(method, params, |view| (view == "simulate_intents").then(|| json!({})))
+        }).await;
+        assert_eq!(submit_held(&fx.ledger, &fx.book, &bridge(&rpc.url)).await.len(), 1);
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Waiting),
+            "the submitted transaction never contained our new local half");
+        assert_eq!(fx.book.held(), vec!["d"], "the new pair must not be closed by the old RPC reply");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_report_cannot_block_our_own_nonce_confirmation() {
+        let fx = fixture();
+        let id = waiting_intent(&fx, "d", Action::Sell);
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
+        fx.ledger.set_reported_tx(&id, "FAKE_TX".into(), "stranger.testnet".into());
+        let rpc = MockRpc::serve(nonce_rpc(true)).await; // tx lookup is unknown
+        confirm_reports(&fx.ledger, &fx.book, &bridge(&rpc.url)).await;
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Settled { .. }));
+    }
+
+    #[tokio::test]
+    async fn legacy_own_halves_require_our_key_and_account_not_a_claimed_signer() {
+        let fx = fixture();
+        let id = waiting_intent(&fx, "d", Action::Sell);
+        let rpc = MockRpc::serve(nonce_rpc(true)).await;
+        let gateway = bridge(&rpc.url);
+        let mut body: serde_json::Value = serde_json::from_str(&half(3, Action::Sell).payload.message).unwrap();
+        body["signer_id"] = json!(gateway.account_id().as_str());
+        let claimed = MultiPayload::sign(&NearKeypair::from_secret_bytes(&[3; 32]), body.to_string(), [3; 32], VERIFIER);
+        fx.book.insert("d", Action::Sell, claimed);
+        confirm_reports(&fx.ledger, &fx.book, &gateway).await;
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Waiting));
+        assert!(rpc.order().is_empty(), "a stranger's nonce is never our proof");
+        // A genuine legacy signature is recognized without trusting its label.
+        let deadline = fx.ledger.get(&id).unwrap().deal.unwrap().signed_until_ms.unwrap();
+        let legacy = sign_half(&NearKeypair::from_secret_bytes(&[9; 32]),
+            &AccountId::try_from(VERIFIER).unwrap(), &near(), Action::Sell,
+            WNEAR, 4_040_000, deadline, [9; 32]);
+        { fx.book.file.lock().unwrap().deals.get_mut("d").unwrap().sell = Some(legacy); }
+        confirm_reports(&fx.ledger, &fx.book, &gateway).await;
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Settled { .. }));
+    }
+
+    #[tokio::test]
+    async fn a_replayed_local_signature_is_not_legacy_proof_for_a_new_deal() {
+        let fx = fixture();
+        let id = waiting_intent(&fx, "d", Action::Sell);
+        let rpc = MockRpc::serve(nonce_rpc(true)).await;
+        // Genuine device key and identical trade amounts, but from a different
+        // signing deadline. A public old signature cannot prove this new deal.
+        fx.book.insert("d", Action::Sell, half(9, Action::Sell));
+        confirm_reports(&fx.ledger, &fx.book, &bridge(&rpc.url)).await;
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Waiting));
+        assert!(rpc.order().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unrelated_signed_diff_cannot_hide_a_confirmed_settlement() {
+        let fx = fixture();
+        let id = waiting_intent(&fx, "d", Action::Sell);
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
+        // A valid signature proves who signed, not that they belong to this
+        // deal. A stranger attaches its mismatching quote to the public deal ID.
+        let stranger = sign_half(
+            &NearKeypair::from_secret_bytes(&[3; 32]),
+            &AccountId::try_from(VERIFIER).unwrap(), &near(), Action::Buy,
+            WNEAR, 4_050_000, 4_102_444_800_000, [3; 32],
+        );
+        receive_diff(&fx.ledger, &fx.book, Chain::NearTestnet, VERIFIER,
+            &diff_message("d", "buy", stranger));
+        let rpc = MockRpc::serve(|method, params| {
+            if params["method_name"] == "simulate_intents" {
+                result(json!({"error":"unmatched_deltas","logs":[]}))
+            } else {
+                healthy(method, params, |view| (view == "is_nonce_used").then(|| json!(true)))
+            }
+        }).await;
+        let gateway = bridge(&rpc.url);
+        submit_held(&fx.ledger, &fx.book, &gateway).await;
+        // An honest gateway may already have settled the real pair. The chain
+        // says our own nonce was consumed, which must still be reconciled.
+        confirm_reports(&fx.ledger, &fx.book, &gateway).await;
+        let intent = fx.ledger.get(&id).unwrap();
+        assert!(matches!(intent.status, IntentStatus::Settled { .. }),
+            "a stranger hid a confirmed settlement: {:?}", intent.status);
+        assert!(!intent.log.iter().any(|line| line.text.contains("FUNDS REMAIN IN INTENTS BALANCE")));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_peer_half_does_not_fail_or_discard_our_signature() {
+        let fx = fixture();
+        let id = waiting_intent(&fx, "d", Action::Sell);
+        let own = half(1, Action::Sell);
+        fx.book.hold_own("d", Action::Sell, own.clone()).unwrap();
+        receive_diff(&fx.ledger, &fx.book, Chain::NearTestnet, VERIFIER,
+            &diff_message("d", "buy", half(3, Action::Buy)));
+        let rejected = MockRpc::serve(|method, params| {
+            if params["method_name"] == "simulate_intents" {
+                result(json!({"error":"insufficient balance","logs":[]}))
+            } else { healthy(method, params, |_| None) }
+        }).await;
+        submit_held(&fx.ledger, &fx.book, &bridge(&rejected.url)).await;
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Waiting));
+        assert_eq!(fx.book.half("d", Action::Sell), Some(own));
+        assert!(fx.book.half("d", Action::Buy).is_none());
+        assert!(receive_diff(&fx.ledger, &fx.book, Chain::NearTestnet, VERIFIER,
+            &diff_message("d", "buy", half(2, Action::Buy))));
+        let online = MockRpc::serve(|method, params| healthy(method, params,
+            |view| (view == "simulate_intents").then(|| json!({})))).await;
+        assert_eq!(submit_held(&fx.ledger, &fx.book, &bridge(&online.url)).await.len(), 1);
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Settled { .. }));
+    }
+
+    #[tokio::test]
+    async fn an_old_false_failure_is_reconciled_only_after_chain_confirmation() {
+        let fx = fixture();
+        let id = waiting_intent(&fx, "d", Action::Sell);
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
+        fx.ledger.advance(&id, IntentStatus::Failed { reason: FailureReason::SettlementRejected }, now_ms()).unwrap();
+        let unused = MockRpc::serve(nonce_rpc(false)).await;
+        confirm_reports(&fx.ledger, &fx.book, &bridge(&unused.url)).await;
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Failed { .. }));
+        let used = MockRpc::serve(nonce_rpc(true)).await;
+        confirm_reports(&fx.ledger, &fx.book, &bridge(&used.url)).await;
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Settled { .. }));
+    }
+
     #[tokio::test]
     async fn offline_device_holds_pair_until_online() {
         let fx = fixture();
         let id = waiting_intent(&fx, "d", Action::Sell);
-        fx.book.insert("d", Action::Sell, half(1, Action::Sell));
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
         fx.book.insert("d", Action::Buy, half(2, Action::Buy));
 
         // Nothing is listening on this port: no route to the chain.
@@ -865,7 +1162,7 @@ mod tests {
     #[tokio::test]
     async fn a_simultaneous_retry_does_not_submit_twice() {
         let fx = fixture();
-        fx.book.insert("d", Action::Sell, half(1, Action::Sell));
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
         fx.book.insert("d", Action::Buy, half(2, Action::Buy));
         let rpc = MockRpc::serve(|method, params| {
             healthy(method, params, |view| (view == "simulate_intents").then(|| json!({})))
@@ -881,10 +1178,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_failure_marks_intent_failed() {
+    async fn pair_failure_keeps_the_signed_intent_waiting_for_its_own_proof() {
         let fx = fixture();
         let id = waiting_intent(&fx, "d", Action::Sell);
-        fx.book.insert("d", Action::Sell, half(1, Action::Sell));
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
         fx.book.insert("d", Action::Buy, half(2, Action::Buy));
 
         let rpc = MockRpc::serve(|method, params| {
@@ -898,16 +1195,16 @@ mod tests {
         assert!(submit_held(&fx.ledger, &fx.book, &bridge(&rpc.url)).await.is_empty());
 
         let intent = fx.ledger.get(&id).unwrap();
-        assert!(matches!(intent.status, IntentStatus::Failed { reason: FailureReason::SettlementRejected }));
-        assert!(intent.log.iter().any(|l| l.text.contains("FUNDS REMAIN IN INTENTS BALANCE")));
+        assert!(matches!(intent.status, IntentStatus::Waiting));
+        assert!(!intent.log.iter().any(|l| l.text.contains("FUNDS REMAIN IN INTENTS BALANCE")));
         assert!(fx.book.held().is_empty(), "a rejected pair is not retried");
     }
 
     #[tokio::test]
-    async fn a_rotated_salt_says_to_sign_again() {
+    async fn a_peer_salt_error_does_not_fail_our_own_signed_intent() {
         let fx = fixture();
         let id = waiting_intent(&fx, "d", Action::Sell);
-        fx.book.insert("d", Action::Sell, half(1, Action::Sell));
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
         fx.book.insert("d", Action::Buy, half(2, Action::Buy));
 
         let rpc = MockRpc::serve(|method, params| {
@@ -921,15 +1218,15 @@ mod tests {
         submit_held(&fx.ledger, &fx.book, &bridge(&rpc.url)).await;
 
         let intent = fx.ledger.get(&id).unwrap();
-        assert!(matches!(intent.status, IntentStatus::Failed { .. }));
-        assert!(intent.log.iter().any(|l| l.text.contains("SALT ROTATED, SIGN AGAIN")));
+        assert!(matches!(intent.status, IntentStatus::Waiting));
+        assert!(intent.log.iter().any(|l| l.text.contains("CHECKING OUR SIGNED INTENT ON CHAIN")));
     }
 
     #[tokio::test]
     async fn an_unfunded_gateway_holds_the_pair_and_says_so_once() {
         let fx = fixture();
         let id = waiting_intent(&fx, "d", Action::Sell);
-        fx.book.insert("d", Action::Sell, half(1, Action::Sell));
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
         fx.book.insert("d", Action::Buy, half(2, Action::Buy));
 
         let rpc = MockRpc::serve(|method, params| {
@@ -954,7 +1251,7 @@ mod tests {
     async fn another_gateway_winning_is_not_a_failure() {
         let fx = fixture();
         let id = waiting_intent(&fx, "d", Action::Sell);
-        fx.book.insert("d", Action::Sell, half(1, Action::Sell));
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
         fx.book.insert("d", Action::Buy, half(2, Action::Buy));
 
         let rpc = MockRpc::serve(|method, params| {
@@ -977,7 +1274,7 @@ mod tests {
         let id = waiting_intent(&fx, "d", Action::Sell);
         let own = half(1, Action::Sell);
         let needle = bs58::encode(own.hash().unwrap()).into_string();
-        fx.book.insert("d", Action::Sell, own);
+        fx.book.hold_own("d", Action::Sell, own).unwrap();
 
         let report = |hash: &str| {
             serde_json::to_string(&SettlementComplete {
@@ -1047,7 +1344,7 @@ mod tests {
     fn an_unanswered_half_is_sent_again_until_it_expires() {
         let fx = fixture();
         waiting_intent(&fx, "d", Action::Sell);
-        fx.book.insert("d", Action::Sell, half(1, Action::Sell));
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
         let now = now_ms();
 
         let resend = halves_to_resend(&fx.ledger, &fx.book, now);
@@ -1127,7 +1424,7 @@ mod tests {
         let id = waiting_intent(&fx, "d", Action::Sell);
         let own = half(1, Action::Sell);
         let hash = bs58::encode(own.hash().unwrap()).into_string();
-        fx.book.insert("d", Action::Sell, own);
+        fx.book.hold_own("d", Action::Sell, own).unwrap();
 
         let unused = MockRpc::serve(nonce_rpc(false)).await;
         confirm_reports(&fx.ledger, &fx.book, &bridge(&unused.url)).await;

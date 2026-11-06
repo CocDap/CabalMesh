@@ -237,7 +237,8 @@ async fn two_devices_settle_through_a_third_party_gateway() {
     let missed = Device::new("B");
     let same_side = missed.post(Action::Buy);
     missed.ledger.propose_deal(&same_side.id, &deal, UsdPrice::from_cents(PRICE_CENTS), "target");
-    missed.ledger.mark_signed(&same_side.id, settlement::deadline_from(now()));
+    let signed_until = b.ledger.get(&buy.id).unwrap().deal.unwrap().signed_until_ms.unwrap();
+    missed.ledger.mark_signed(&same_side.id, signed_until);
     missed.ledger.advance(&same_side.id, IntentStatus::Waiting, now()).unwrap();
     missed.book.insert(&deal, Action::Buy, buy_half.payload.clone());
     settlement::confirm_reports(&missed.ledger, &missed.book, &missed.bridge()).await;
