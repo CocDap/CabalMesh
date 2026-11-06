@@ -863,18 +863,20 @@ fn parse_draft(fields: &IntentFields, chain: cabal_core::Chain) -> Result<cabal_
         });
     }
 
-    let condition = if condition.to_ascii_lowercase().starts_with("any") {
+    let condition = if condition.eq_ignore_ascii_case("Any price") {
         Condition::Any
-    } else {
+    } else if condition.eq_ignore_ascii_case("Price under") || condition.eq_ignore_ascii_case("Price above") {
         let parsed_price = UsdPrice::parse(price).map_err(|_| AppError::InvalidIntent {
             field: "price",
             reason: InvalidReason::Malformed,
         })?;
-        if condition.to_ascii_lowercase().contains("above") {
+        if condition.eq_ignore_ascii_case("Price above") {
             Condition::Above { price: parsed_price }
         } else {
             Condition::Under { price: parsed_price }
         }
+    } else {
+        return Err(AppError::InvalidIntent { field: "condition", reason: InvalidReason::Malformed });
     };
 
     let mode = ExecutionMode::ALL
@@ -928,6 +930,15 @@ fn review_rows(draft: &cabal_core::IntentDraft) -> Vec<ReviewRow> {
     ]
 }
 
+/// Parsing has no ledger side effect: status stays DRAFT until confirmation.
+fn preview_rows(draft: &cabal_core::IntentDraft) -> Vec<ReviewRow> {
+    let mut rows = review_rows(draft);
+    rows[0].value = format!("{:?}", draft.action).to_uppercase();
+    rows.insert(0, ReviewRow { key: "STATUS".into(), value: "DRAFT".into() });
+    rows.insert(2, ReviewRow { key: "ASSET".into(), value: draft.asset.to_string() });
+    rows
+}
+
 /// Whether an intent composed right now would leave the device.
 ///
 /// Peer count is part of the answer, not an afterthought: gossipsub with no
@@ -945,34 +956,21 @@ async fn will_broadcast(state: &AppState) -> bool {
         .is_ok_and(|snapshot| !snapshot.offline && snapshot.peer_count > 0)
 }
 
-/// Parses free text into intent fields via the local (or configured) LLM —
-/// the "say what you want to do" entry point in
-/// `docs/intent-chat-and-modules-design.md`.
-///
-/// **This is exactly as trusted as a hand-filled form.** The returned
-/// fields are raw strings, identical in shape to what `New.tsx` already
-/// builds from its own inputs; nothing about this command validates them,
-/// signs anything, or is closer to broadcast than the empty form is. The
-/// frontend feeds the result into the same `preview_intent` /
-/// `broadcast_intent` pipeline unchanged, which is what actually validates
-/// it. The model proposes; Rust still decides.
-///
-/// # Errors
-///
-/// [`AppError::Internal`] if the LLM could not be reached at all — a model
-/// that responded but not in valid JSON is *not* an error: every field
-/// comes back blank instead, which the review step already knows how to
-/// reject field by field.
+/// Proposes fields through the configured model, then validates the complete
+/// draft. This command never creates, queues, signs or broadcasts an intent.
 #[tauri::command]
 pub async fn parse_intent_chat(text: String, state: State<'_, AppState>) -> Result<IntentFields, AppError> {
     let options = build_form_options(&state).await;
     let services = state.services()?;
     let client = services.llm().await;
-    crate::intent_chat::parse(&client, &text, &options).await.map_err(|error| match error {
+    let fields = crate::intent_chat::parse(&client, &text, &options).await.map_err(|error| match error {
         crate::intent_chat::IntentChatError::Llm(error) => error.into(),
+        crate::intent_chat::IntentChatError::InvalidField { field, reason } => AppError::InvalidIntent { field, reason },
         // Valid JSON of the wrong shape is still the model's answer being unusable.
         other => AppError::from(crate::llm_client::LlmError::BadResponse(other.to_string())),
-    })
+    })?;
+    parse_draft(&fields, device_chain())?;
+    Ok(fields)
 }
 
 /// One choice in the Profile screen's preset list. Sent from here so that the URLs,
@@ -1126,7 +1124,7 @@ pub async fn preview_intent(
     let live = will_broadcast(&state).await;
 
     Ok(IntentPreview {
-        rows: review_rows(&draft),
+        rows: preview_rows(&draft),
         confirm: if live { CONFIRM_ONLINE } else { CONFIRM_QUEUED }.to_string(),
         will_broadcast: live,
     })
@@ -1845,6 +1843,27 @@ mod intent_tests {
         assert_eq!(value("MODE"), "SHARK MODE");
         assert_eq!(rows.len(), 4);
         assert!(!rows.iter().any(|row| row.key == "PRIVACY"));
+    }
+
+    #[test]
+    fn an_ai_sell_preview_preserves_the_amount_and_price_direction() {
+        let draft = parse_draft(&fields("SELL", "wNEAR", "Price above", "3.9", "0.1", "SHARK MODE", "LOW")).unwrap();
+        assert_eq!(draft.amount.to_plain_string(), "0.1");
+        assert!(matches!(draft.condition, cabal_core::Condition::Above { price } if price == cabal_core::UsdPrice::from_cents(390)));
+        let rows = preview_rows(&draft);
+        let value = |key| rows.iter().find(|row| row.key == key).unwrap().value.as_str();
+        assert_eq!(value("STATUS"), "DRAFT");
+        assert_eq!(value("ACTION"), "SELL");
+        assert_eq!(value("ASSET"), "wNEAR");
+        assert_eq!(value("CONDITION"), "ABOVE $3.90");
+        assert_eq!(value("AMOUNT"), "0.1 wNEAR");
+    }
+
+    #[test]
+    fn an_unknown_price_condition_is_not_treated_as_under() {
+        for condition in ["", "higher maybe", "any unknown condition"] {
+            assert!(matches!(parse_draft(&fields("SELL", "wNEAR", condition, "3.9", "0.1", "SHARK MODE", "LOW")), Err(AppError::InvalidIntent { field: "condition", .. })));
+        }
     }
 
     #[test]

@@ -55,7 +55,7 @@ function modelCopy(problem: ModelProblem): string {
     case "refused":
       return "The model endpoint refused. Check the key and model in Profile.";
     case "bad_answer":
-      return "The model's answer could not be read. Fill the form by hand.";
+      return "The model's answer could not be read. Rephrase your request and try again.";
     case "budget_used_up":
       return "The hourly AI call limit is used up. Raise it in Profile.";
     case "no_model":

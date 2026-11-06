@@ -1,0 +1,79 @@
+.intent-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  max-width: 42rem;
+  margin-inline: auto;
+}
+
+.intent-composer-input,
+.intent-composer-result,
+.intent-composer-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.intent-composer-label,
+.intent-composer-result h2 {
+  margin: 0;
+  font-family: var(--type-heading-family);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--type-heading-tracking);
+  color: var(--text-primary);
+}
+
+.intent-composer-help,
+.intent-composer-progress,
+.intent-composer-error {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.6;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.intent-composer-progress:empty { display: none; }
+.intent-composer-error { color: var(--status-alert); }
+
+.intent-composer #intent-chat {
+  min-height: 8rem;
+  line-height: 1.6;
+  scroll-margin-top: var(--space-12);
+}
+.intent-composer #intent-chat::placeholder { color: var(--text-muted); opacity: 1; }
+
+.intent-composer-result {
+  padding-block: var(--space-7);
+  border-top: var(--border-width) solid var(--border-default);
+  scroll-margin-top: var(--space-12);
+}
+.intent-composer-result:focus { outline: none; }
+.intent-composer-result:focus-visible { outline: var(--border-width) solid var(--border-focus); outline-offset: var(--space-2); }
+
+.intent-composer-rows { margin: 0; }
+.intent-composer-rows > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: var(--space-5);
+  padding-block: var(--space-5);
+  border-bottom: var(--border-width) solid var(--border-hairline);
+}
+.intent-composer-rows dt {
+  font-family: var(--type-label-family);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  color: var(--text-secondary);
+}
+.intent-composer-rows dd {
+  margin: 0;
+  text-align: right;
+  font-family: var(--type-data-family);
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
