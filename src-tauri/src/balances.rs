@@ -11,8 +11,99 @@ use std::collections::BTreeMap;
 
 /// Where the last read is kept.
 #[must_use]
-pub fn store() -> cabal_store::JsonStore {
-    cabal_store::JsonStore::new(crate::app_paths::in_data_dir("near_balances.json"))
+pub fn store() -> BalanceStore {
+    BalanceStore::new(crate::app_paths::in_data_dir("near_balances.json"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedAsset {
+    pub symbol: String,
+    pub contract: String,
+    pub decimals: u8,
+}
+
+impl From<&AssetSpec> for CachedAsset {
+    fn from(spec: &AssetSpec) -> Self {
+        Self { symbol: spec.symbol.into(), contract: spec.contract.into(), decimals: spec.decimals }
+    }
+}
+
+/// Account snapshots are separate from settings documents and are only saved by
+/// a completed chain refresh (or the one-time legacy import).
+#[derive(Clone)]
+pub struct BalanceStore { legacy: cabal_store::DocumentStore }
+
+impl BalanceStore {
+    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
+        Self { legacy: cabal_store::DocumentStore::new(path) }
+    }
+
+    fn database(&self) -> Result<cabal_store::Database, cabal_store::StoreError> {
+        let database = self.legacy.database()?;
+        if !database.migrated("account:balances")? {
+            let legacy = match self.legacy.load_optional::<Balances>() {
+                Ok(legacy) => legacy,
+                Err(error @ cabal_store::StoreError::Decode { .. }) => {
+                    tracing::warn!(%error,"legacy balance cache is invalid; keeping its file as a backup");
+                    None
+                }
+                Err(error) => return Err(error),
+            };
+            let snapshot = legacy.as_ref().filter(|old| old.network.is_some() && !old.account.is_empty())
+                .map(|old| self.snapshot(old)).transpose()?;
+            database.import_snapshot("account:balances", snapshot.as_ref())?;
+        }
+        Ok(database)
+    }
+
+    fn snapshot(&self, balances: &Balances) -> Result<cabal_store::SnapshotRow, cabal_store::StoreError> {
+        let path = self.legacy.path().to_path_buf();
+        let invalid = |reason| cabal_store::StoreError::InvalidData { path: path.clone(), reason };
+        let network = balances.network.ok_or_else(|| invalid("snapshot has no network"))?;
+        if balances.account.is_empty() { return Err(invalid("snapshot has no account")); }
+        let assets: Vec<CachedAsset> = if balances.assets.is_empty() {
+            crate::network_config::assets(network.chain()).iter().map(CachedAsset::from).collect()
+        } else { balances.assets.clone() };
+        let mut tokens = Vec::new();
+        for asset in &assets {
+            if let Some(balance) = balances.tokens.get(&asset.symbol) {
+                tokens.push(cabal_store::TokenRow { contract: asset.contract.clone(), symbol: asset.symbol.clone(), decimals: asset.decimals,
+                    wallet: balance.wallet.clone(), in_intents: balance.in_intents.clone() });
+            }
+        }
+        if let (Some(wrapper), Some(token)) = (&balances.native_wrapper, &balances.native_token) {
+            if !tokens.iter().any(|token| &token.contract == wrapper) {
+                tokens.push(cabal_store::TokenRow { contract: wrapper.clone(), symbol: "wNEAR".into(), decimals: 24,
+                    wallet: token.wallet.clone(), in_intents: token.in_intents.clone() });
+            }
+        }
+        for amount in tokens.iter().flat_map(|token| [&token.wallet,&token.in_intents])
+            .chain(balances.native.iter()).chain(balances.native_available.iter()) {
+            if amount.parse::<u128>().is_err() { return Err(invalid("invalid raw token amount")); }
+        }
+        Ok(cabal_store::SnapshotRow {
+            account: balances.account.clone(), network: network_key(network).into(), network_label: network.label().into(),
+            native: balances.native.clone(), native_available: balances.native_available.clone(), wrapper: balances.native_wrapper.clone(),
+            updated_ms: i64::try_from(crate::intents::now_ms()).unwrap_or(i64::MAX),
+            payload: serde_json::to_string(balances).map_err(|source| cabal_store::StoreError::Encode { path, source })?, tokens,
+        })
+    }
+
+    pub fn save(&self, balances: &Balances) -> Result<(), cabal_store::StoreError> {
+        let snapshot = self.snapshot(balances)?;
+        self.database()?.save_snapshot(&snapshot)
+    }
+
+    pub fn load(&self, account: &str, network: Network) -> Result<Balances, cabal_store::StoreError> {
+        match self.database()?.snapshot(account, network_key(network))? {
+            Some(raw) => serde_json::from_str(&raw).map_err(|source| cabal_store::StoreError::Decode { path: self.legacy.path().to_path_buf(), source }),
+            None => Ok(Balances::default()),
+        }
+    }
+}
+
+fn network_key(network: Network) -> &'static str {
+    match network { Network::Testnet => "near-testnet", Network::Mainnet => "near-mainnet" }
 }
 
 /// One token's raw amounts, as decimal strings: `u128` does not survive every
@@ -45,6 +136,8 @@ pub struct Balances {
     pub native_available: Option<String>,
     #[serde(default)]
     pub native_wrapper: Option<String>,
+    #[serde(default)]
+    pub assets: Vec<CachedAsset>,
     /// By asset symbol.
     pub tokens: BTreeMap<String, TokenBalance>,
 }
@@ -84,6 +177,7 @@ impl Balances {
             native_token: Some(native_token),
             native_available: Some(bridge.native_deposit_available(wrapper).await?.to_string()),
             native_wrapper: Some(wrapper.into()),
+            assets: assets.iter().map(CachedAsset::from).collect(),
             tokens,
         })
     }
@@ -91,8 +185,11 @@ impl Balances {
     /// The cached read, unless it belongs to another account or network: after
     /// an import or a switch those figures would describe somebody else.
     #[must_use]
-    pub fn load_for(store: &cabal_store::JsonStore, account: &str, network: Network) -> Self {
-        let cached: Self = store.load_or(Self::default());
+    pub fn load_for(store: &BalanceStore, account: &str, network: Network) -> Self {
+        let cached = match store.load(account, network) {
+            Ok(cached) => cached,
+            Err(error) => { tracing::warn!(%error,"could not read cached account"); Self::default() }
+        };
         if cached.account == account && cached.network == Some(network) {
             let mut cached = cached;
             if cached.native_wrapper.as_deref() != Some(network.near().wrapped_native) {
@@ -110,6 +207,13 @@ impl Balances {
     pub fn in_intents_raw(&self, symbol: &str) -> Option<u128> {
         self.tokens.get(symbol)?.in_intents_raw()
     }
+
+    pub fn token_for(&self, spec: &AssetSpec) -> Option<&TokenBalance> {
+        if !self.assets.is_empty() && !self.assets.iter().any(|asset| asset.symbol == spec.symbol && asset.contract == spec.contract && asset.decimals == spec.decimals) {
+            return None;
+        }
+        self.tokens.get(spec.symbol)
+    }
 }
 
 /// Refuses a draft this account could not settle, when that is known.
@@ -124,7 +228,7 @@ pub fn covers(balances: &Balances, draft: &IntentDraft, near: &NearConfig) -> bo
     match draft.action {
         // The seller's fee comes out of what the trade pays them.
         Action::Sell => balances
-            .in_intents_raw(base.symbol)
+            .token_for(base).and_then(TokenBalance::in_intents_raw)
             .is_none_or(|held| held >= draft.amount.raw()),
         Action::Buy => {
             let Condition::Under { price } = draft.condition else {
@@ -140,7 +244,7 @@ pub fn covers(balances: &Balances, draft: &IntentDraft, near: &NearConfig) -> bo
             .and_then(|cost| cost.checked_add(fee)) else {
                 return false;
             };
-            balances.in_intents_raw(quote.symbol).is_none_or(|held| held >= cost)
+            balances.token_for(quote).and_then(TokenBalance::in_intents_raw).is_none_or(|held| held >= cost)
         }
         Action::Swap | Action::Stake => true,
     }
@@ -255,7 +359,7 @@ mod tests {
     #[test]
     fn a_cached_read_belongs_to_one_account_on_one_network() {
         let dir = TempDir::new().unwrap();
-        let store = cabal_store::JsonStore::new(dir.path().join("balances.json"));
+        let store = BalanceStore::new(dir.path().join("balances.json"));
         let mut balances = held(WNEAR, 1);
         balances.account = "alice".into();
         balances.network = Some(Network::Testnet);
@@ -264,5 +368,37 @@ mod tests {
         assert_eq!(Balances::load_for(&store, "alice", Network::Testnet), balances);
         assert_eq!(Balances::load_for(&store, "bob", Network::Testnet), Balances::default());
         assert_eq!(Balances::load_for(&store, "alice", Network::Mainnet), Balances::default());
+    }
+
+    #[test]
+    fn legacy_account_cache_migrates_without_overwriting_other_accounts() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("near_balances.json");
+        let mut old = held(WNEAR,1);
+        old.account = "alice.testnet".into(); old.network = Some(Network::Testnet);
+        cabal_store::JsonStore::new(&path).save(&old).unwrap();
+        let backup = std::fs::read(&path).unwrap();
+        let store = BalanceStore::new(&path);
+        assert_eq!(store.load("alice.testnet",Network::Testnet).unwrap(),old);
+        let mut next = held(WNEAR * 2,2);
+        next.account = "bob.testnet".into(); next.network = Some(Network::Testnet);
+        store.save(&next).unwrap();
+        assert_eq!(store.load("bob.testnet",Network::Testnet).unwrap(),next);
+        assert_eq!(store.load("alice.testnet",Network::Testnet).unwrap(),old);
+        assert_eq!(std::fs::read(&path).unwrap(),backup);
+    }
+
+    #[test]
+    fn a_fresh_refresh_can_replace_a_corrupt_legacy_cache() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("near_balances.json");
+        std::fs::write(&path,"broken JSON").unwrap();
+        let store = BalanceStore::new(&path);
+        assert_eq!(store.load("alice.testnet",Network::Testnet).unwrap(),Balances::default());
+        let mut fresh = held(WNEAR,1);
+        fresh.account = "alice.testnet".into(); fresh.network = Some(Network::Testnet);
+        store.save(&fresh).unwrap();
+        assert_eq!(store.load("alice.testnet",Network::Testnet).unwrap(),fresh);
+        assert_eq!(std::fs::read_to_string(path).unwrap(),"broken JSON");
     }
 }

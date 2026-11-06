@@ -179,6 +179,7 @@ jni = "0.22"
 ndk-context = "0.1"
 
 [dev-dependencies]
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 cabal-store = { path = "crates/cabal-store" }
 tempfile = "3"

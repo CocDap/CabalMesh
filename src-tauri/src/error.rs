@@ -39,6 +39,8 @@ use serde::Serialize;
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AppError {
+    #[error("local data could not be saved")]
+    LocalStorage,
     /// A subsystem has not finished starting.
     ///
     /// Not a failure — the connecting screen renders this as progress. It
@@ -163,6 +165,10 @@ impl From<crate::llm_client::LlmError> for AppError {
 }
 
 impl AppError {
+    pub fn local_storage(error: cabal_store::StoreError) -> Self {
+        tracing::error!(target: "cabalmesh::storage", %error, chain = %SourceChain(&error), "local database operation failed");
+        Self::LocalStorage
+    }
     /// Wraps an error that the frontend cannot act on.
     ///
     /// The source is **dropped from the return value on purpose** and logged
@@ -203,6 +209,7 @@ impl AppError {
             | Self::InvalidIntent { .. }
             | Self::NearAccountNotFunded { .. }
             | Self::InsufficientNative
+            | Self::LocalStorage
             | Self::NativeTransferUnconfirmed { .. }
             | Self::VaultLocked
             | Self::TooManySubscriptions { .. }

@@ -55,7 +55,7 @@ impl BootstrapConfig {
     /// defaults. Config is replaceable, so it uses the forgiving load — unlike
     /// the vault, which must fail loudly.
     #[must_use]
-    pub fn load(store: &cabal_store::JsonStore) -> Self {
+    pub fn load(store: &cabal_store::DocumentStore) -> Self {
         let mut config: Self = store.load_or(Self::default());
         if config.relays.is_empty() {
             config.relays = Self::default_relays();
@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn absent_config_yields_defaults() {
         let dir = TempDir::new().unwrap();
-        let store = cabal_store::JsonStore::new(dir.path().join("bootstrap.json"));
+        let store = cabal_store::DocumentStore::new(dir.path().join("bootstrap.json"));
         assert_eq!(BootstrapConfig::load(&store).relays, BootstrapConfig::default_relays());
     }
 
@@ -111,14 +111,14 @@ mod tests {
         let path = dir.path().join("bootstrap.json");
         std::fs::write(&path, "{}").unwrap();
 
-        let store = cabal_store::JsonStore::new(&path);
+        let store = cabal_store::DocumentStore::new(&path);
         assert_eq!(BootstrapConfig::load(&store).relays, BootstrapConfig::default_relays());
     }
 
     #[test]
     fn a_user_override_replaces_rather_than_appends() {
         let dir = TempDir::new().unwrap();
-        let store = cabal_store::JsonStore::new(dir.path().join("bootstrap.json"));
+        let store = cabal_store::DocumentStore::new(dir.path().join("bootstrap.json"));
         store
             .save(&BootstrapConfig {
                 relays: vec!["/ip4/10.0.0.1/udp/4001/quic-v1".into()],

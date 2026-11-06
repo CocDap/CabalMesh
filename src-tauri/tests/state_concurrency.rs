@@ -23,7 +23,7 @@ async fn simulated_command(state: AppState, work: Duration) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_commands_overlap_rather_than_serialize() {
-    let state = AppState::new();
+    let state = AppState::new().unwrap();
     let work = Duration::from_millis(150);
     let tasks = 8;
 
@@ -52,7 +52,7 @@ async fn concurrent_commands_overlap_rather_than_serialize() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn readers_do_not_block_each_other() {
-    let state = AppState::new();
+    let state = AppState::new().unwrap();
     let readers = 32;
 
     let handles: Vec<_> = (0..readers)
@@ -74,7 +74,7 @@ async fn readers_do_not_block_each_other() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn writes_are_visible_across_clones_and_threads() {
-    let state = AppState::new();
+    let state = AppState::new().unwrap();
     let observer = state.clone();
 
     let writer = tokio::spawn(async move {
@@ -97,7 +97,7 @@ async fn writes_are_visible_across_clones_and_threads() {
 /// panicked inside the IPC handler.
 #[tokio::test]
 async fn early_commands_get_not_ready_instead_of_panicking() {
-    let state = Arc::new(AppState::new());
+    let state = Arc::new(AppState::new().unwrap());
 
     let handles: Vec<_> = (0..16)
         .map(|_| {

@@ -10,7 +10,7 @@ import type { AssetOption, FormOptions, IntentFields, IntentPreview } from "../t
  * Composing an intent.
  *
  * **Every option comes from Rust.** Actions, assets and their precision, the
- * conditions, the execution modes *and their descriptions*, the privacy levels.
+ * conditions, the execution modes *and their descriptions*.
  * Hardcoding any of them here would let a mode and its description drift apart,
  * and would put the decimal precision of an asset in two places — one of which
  * would eventually be wrong about money.
@@ -37,7 +37,6 @@ export function New({ onBroadcast }: { onBroadcast: (id: IntentId) => void }) {
   const [price, setPrice] = useState("");
   const [amount, setAmount] = useState("");
   const [mode, setMode] = useState("SHARK MODE");
-  const [privacy, setPrivacy] = useState("HIGH");
 
   const [preview, setPreview] = useState<IntentPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +59,6 @@ export function New({ onBroadcast }: { onBroadcast: (id: IntentId) => void }) {
         if (next.assets[0]) setAsset(next.assets[0].name);
         if (next.conditions[0]) setCondition(next.conditions[0]);
         if (next.modes[0]) setMode(next.modes[0].label);
-        if (next.privacyLevels[0]) setPrivacy(next.privacyLevels[0]);
       })
       .catch(() => undefined);
     return () => {
@@ -78,7 +76,8 @@ export function New({ onBroadcast }: { onBroadcast: (id: IntentId) => void }) {
   // One object, matching Rust's `IntentFields`. Preview and broadcast send
   // the identical value, which is what makes "the dialog describes what goes
   // out" a property rather than a promise.
-  const fields: IntentFields = { action, asset, condition, price, amount, mode, privacy };
+  // Preserve the existing wire format without presenting unsupported privacy controls.
+  const fields: IntentFields = { action, asset, condition, price, amount, mode, privacy: "LOW" };
 
   const review = async () => {
     setError(null);
@@ -121,7 +120,6 @@ export function New({ onBroadcast }: { onBroadcast: (id: IntentId) => void }) {
       if (parsed.price) setPrice(parsed.price);
       if (parsed.amount) setAmount(parsed.amount);
       if (parsed.mode) setMode(parsed.mode);
-      if (parsed.privacy) setPrivacy(parsed.privacy);
     } catch (failure) {
       setChatError(errorCopy(failure));
     } finally {
@@ -255,17 +253,6 @@ export function New({ onBroadcast }: { onBroadcast: (id: IntentId) => void }) {
           <span style={{ fontSize: "var(--text-base)", color: "var(--text-muted)" }}>
             {selectedMode?.description ?? ""}
           </span>
-        </div>
-      </Panel>
-
-      <Panel label="PRIVACY">
-        <div style={{ padding: "var(--space-6)" }}>
-          <Segmented
-            name="Privacy level"
-            options={options?.privacyLevels ?? []}
-            value={privacy}
-            onChange={setPrivacy}
-          />
         </div>
       </Panel>
 

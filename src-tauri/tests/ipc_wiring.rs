@@ -38,7 +38,7 @@ fn app_with_state() -> tauri::App<tauri::test::MockRuntime> {
         .expect("mock app builds");
 
     // Managed synchronously, exactly as `run()` does it.
-    app.manage(AppState::new());
+    app.manage(AppState::new().unwrap());
     app
 }
 

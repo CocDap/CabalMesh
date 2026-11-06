@@ -11,7 +11,7 @@
 //! key is only ever returned for the exact base URL it was saved with.
 
 use crate::error::{AppError, InvalidReason};
-use cabal_store::JsonStore;
+use cabal_store::DocumentStore;
 use cabal_vault::{DataKey, Secret, StaticKeyProvider, Vault};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -102,8 +102,8 @@ impl Default for LlmSettings {
     }
 }
 
-fn store() -> JsonStore {
-    JsonStore::new(crate::app_paths::in_data_dir("llm.json"))
+fn store() -> DocumentStore {
+    DocumentStore::new(crate::app_paths::in_data_dir("llm.json"))
 }
 
 /// This device's settings, or the defaults.
@@ -144,7 +144,7 @@ pub fn applied(
     Ok(LlmSettings { preset, base_url, model, calls_per_hour, tools_supported })
 }
 
-pub(crate) fn load_from(store: &JsonStore) -> LlmSettings {
+pub(crate) fn load_from(store: &DocumentStore) -> LlmSettings {
     if store.exists() {
         return store.load_or(LlmSettings::default());
     }
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn first_run_defaults_to_ollama_local() {
         let dir = tempfile::tempdir().unwrap();
-        let settings = load_from(&JsonStore::new(dir.path().join("llm.json")));
+        let settings = load_from(&DocumentStore::new(dir.path().join("llm.json")));
         assert_eq!(settings.preset, Preset::OllamaLocal);
         assert_eq!(settings.model, "llama3.1:8b");
         assert_eq!(settings.calls_per_hour, 30);
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn settings_round_trip_through_their_file() {
         let dir = tempfile::tempdir().unwrap();
-        let store = JsonStore::new(dir.path().join("llm.json"));
+        let store = DocumentStore::new(dir.path().join("llm.json"));
         let settings = LlmSettings {
             preset: Preset::OpenRouter,
             base_url: Preset::OpenRouter.base_url().into(),
@@ -335,7 +335,7 @@ mod tests {
     fn a_remote_ollama_url_from_an_older_install_is_kept() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("ollama_url.txt"), "http://192.168.1.9:11434/\n").unwrap();
-        let settings = load_from(&JsonStore::new(dir.path().join("llm.json")));
+        let settings = load_from(&DocumentStore::new(dir.path().join("llm.json")));
         assert_eq!(settings.preset, Preset::OllamaLocal);
         assert_eq!(settings.base_url, "http://192.168.1.9:11434/v1");
     }
@@ -344,7 +344,7 @@ mod tests {
     fn saved_settings_win_over_an_older_url() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("ollama_url.txt"), "http://192.168.1.9:11434").unwrap();
-        let store = JsonStore::new(dir.path().join("llm.json"));
+        let store = DocumentStore::new(dir.path().join("llm.json"));
         store.save(&LlmSettings::default()).unwrap();
         assert_eq!(load_from(&store), LlmSettings::default());
     }

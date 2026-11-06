@@ -110,7 +110,7 @@ mod tests {
     fn suspending_cancels_live_streams() {
         // Exercises the state effect directly; AppHandle cannot be constructed
         // outside a Tauri app, and the handler is a thin wrapper over this.
-        let state = AppState::new();
+        let state = AppState::new().unwrap();
         let (_id, token) = state.subscriptions().register("mesh-log").unwrap();
 
         state.subscriptions().cancel_all();
@@ -123,7 +123,7 @@ mod tests {
     fn suspending_before_bootstrap_is_harmless() {
         // Suspension can arrive during launch, before services exist. It must
         // not panic on the missing subsystem.
-        let state = AppState::new();
+        let state = AppState::new().unwrap();
         assert!(state.services().is_err());
         state.subscriptions().cancel_all();
     }

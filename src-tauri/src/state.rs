@@ -92,11 +92,17 @@ impl Services {
     ///
     /// [`AppError::VaultLocked`] while no key is available.
     pub async fn near(&self) -> Result<NearBridge, AppError> {
-        let keypair = self.identity.lock().await.primary_keypair().ok_or(AppError::VaultLocked)?;
+        self.near_context().await.map(|(bridge, _)| bridge)
+    }
+
+    /// The RPC client and network must describe the same refresh, even if the
+    /// user switches networks while the request is running.
+    pub async fn near_context(&self) -> Result<(NearBridge, crate::network_config::NetworkConfig), AppError> {
         let config = crate::network_config::NetworkConfig::current();
+        let keypair = self.identity.lock().await.primary_keypair_for(config.network).ok_or(AppError::VaultLocked)?;
         let fee = config.near().gateway_fee();
         NearBridge::new(config.rpc_url(), &config.verifier(), keypair, self.http.clone())
-            .map(|bridge| bridge.with_gateway_fee(fee))
+            .map(|bridge| (bridge.with_gateway_fee(fee), config))
             .map_err(AppError::internal)
     }
 
@@ -203,26 +209,25 @@ impl AppState {
     ///
     /// Call and `manage` this **synchronously**, before the webview can
     /// invoke. Bootstrap fills it in afterwards via [`AppState::set_services`].
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Result<Self, cabal_store::StoreError> {
+        Ok(Self {
             inner: Arc::new(Inner {
                 services: RwLock::new(None),
                 runtime: RwLock::new(RuntimeCaps::default()),
                 caps: PlatformCaps::current(),
                 started: std::time::Instant::now(),
                 subscriptions: Registry::new(),
-                intents: crate::intents::Ledger::open(cabal_store::JsonStore::new(
+                intents: crate::intents::Ledger::open(cabal_store::DocumentStore::new(
                     crate::app_paths::in_data_dir("intents.json"),
-                )),
-                received: crate::intents::ReceivedLog::open(cabal_store::JsonStore::new(
+                ))?,
+                received: crate::intents::ReceivedLog::open(cabal_store::DocumentStore::new(
                     crate::app_paths::in_data_dir("received_intents.json"),
-                )),
-                diff_book: crate::near_settlement::DiffBook::open(cabal_store::JsonStore::new(
+                ))?,
+                diff_book: crate::near_settlement::DiffBook::open(cabal_store::DocumentStore::new(
                     crate::app_paths::in_data_dir("near_diffs.json"),
-                )),
+                ))?,
             }),
-        }
+        })
     }
 
     /// Publishes the bootstrapped services. Called once, from bootstrap.
@@ -341,19 +346,13 @@ impl AppState {
     }
 }
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn is_not_ready_before_bootstrap() {
-        let state = AppState::new();
+        let state = AppState::new().unwrap();
         assert!(!state.is_ready());
         assert!(matches!(
             state.services(),
@@ -366,13 +365,13 @@ mod tests {
         // The whole point: before, a command arriving during bootstrap panicked
         // inside the IPC handler because the managed type was absent. Now it is
         // a value the connecting screen already knows how to render.
-        let state = AppState::new();
+        let state = AppState::new().unwrap();
         assert!(state.services().is_err());
     }
 
     #[test]
     fn platform_caps_are_immutable_and_copy() {
-        let state = AppState::new();
+        let state = AppState::new().unwrap();
         let first = state.platform_caps();
         let second = state.platform_caps();
         assert_eq!(first, second);
@@ -382,7 +381,7 @@ mod tests {
     fn runtime_caps_start_pessimistic() {
         // Optimistic defaults would have the first render claim capabilities
         // that have not been observed.
-        let caps = AppState::new().runtime_caps();
+        let caps = AppState::new().unwrap().runtime_caps();
         assert!(!caps.mdns_granted);
         assert!(!caps.relay_reachable);
         assert!(!caps.online);
@@ -393,7 +392,7 @@ mod tests {
         // The distinction from PlatformCaps: a user can revoke local network
         // access while the app is backgrounded, and the app must be able to
         // notice.
-        let state = AppState::new();
+        let state = AppState::new().unwrap();
         state.set_runtime_caps(RuntimeCaps {
             mdns_granted: true,
             relay_reachable: true,
@@ -411,7 +410,7 @@ mod tests {
 
     #[test]
     fn clones_share_one_underlying_state() {
-        let state = AppState::new();
+        let state = AppState::new().unwrap();
         let clone = state.clone();
         state.set_runtime_caps(RuntimeCaps { online: true, ..RuntimeCaps::default() });
         assert!(clone.runtime_caps().online);

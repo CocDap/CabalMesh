@@ -62,8 +62,8 @@ impl Device {
         Self {
             name,
             keypair: key(name),
-            ledger: Ledger::open(cabal_store::JsonStore::new(dir.path().join("intents.json"))),
-            book: DiffBook::open(cabal_store::JsonStore::new(dir.path().join("diffs.json"))),
+            ledger: Ledger::open(cabal_store::DocumentStore::new(dir.path().join("intents.json"))).unwrap(),
+            book: DiffBook::open(cabal_store::DocumentStore::new(dir.path().join("diffs.json"))).unwrap(),
             _dir: dir,
         }
     }
@@ -82,7 +82,7 @@ impl Device {
             mode: ExecutionMode::Shark,
             privacy: PrivacyLevel::Low,
         };
-        let intent = self.ledger.create(draft, now());
+        let intent = self.ledger.create(draft, now()).unwrap();
         self.ledger.advance(&intent.id, IntentStatus::Broadcast { route_len: 1 }, now()).unwrap();
         intent
     }

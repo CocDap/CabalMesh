@@ -42,7 +42,7 @@ struct Install {
 #[must_use]
 pub fn first_seen_ms(now_ms: u64) -> u64 {
     first_seen_in(
-        &cabal_store::JsonStore::new(crate::app_paths::in_data_dir("install.json")),
+        &cabal_store::DocumentStore::new(crate::app_paths::in_data_dir("install.json")),
         now_ms,
     )
 }
@@ -51,7 +51,7 @@ pub fn first_seen_ms(now_ms: u64) -> u64 {
 ///
 /// Split out so it is testable: `app_paths` is a process-wide `OnceLock`, so a
 /// test that set it would depend on running before every other test that does.
-fn first_seen_in(store: &cabal_store::JsonStore, now_ms: u64) -> u64 {
+fn first_seen_in(store: &cabal_store::DocumentStore, now_ms: u64) -> u64 {
     if let Ok(existing) = store.load::<Install>() {
         return existing.first_seen_ms;
     }
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn the_first_seen_timestamp_is_written_once_and_then_kept() {
         let dir = tempfile::tempdir().unwrap();
-        let store = cabal_store::JsonStore::new(dir.path().join("install.json"));
+        let store = cabal_store::DocumentStore::new(dir.path().join("install.json"));
 
         let first = first_seen_in(&store, 1_000_000);
         // A later call must not move the date, or "member since" would read as
@@ -150,8 +150,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("install.json");
 
-        let written = first_seen_in(&cabal_store::JsonStore::new(&path), 1_785_715_200_000);
-        let reread = first_seen_in(&cabal_store::JsonStore::new(&path), 9_999_999_999_999);
+        let written = first_seen_in(&cabal_store::DocumentStore::new(&path), 1_785_715_200_000);
+        let reread = first_seen_in(&cabal_store::DocumentStore::new(&path), 9_999_999_999_999);
 
         assert_eq!(written, reread);
         assert_eq!(format_date(reread), "2026.08.03");

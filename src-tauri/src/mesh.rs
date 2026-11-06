@@ -242,7 +242,7 @@ impl MeshNetwork {
 
         // Dial bootstrap peers so discovery is not limited to this network.
         let bootstrap = crate::bootstrap_config::BootstrapConfig::load(
-            &cabal_store::JsonStore::new(crate::app_paths::in_data_dir("bootstrap.json")),
+            &cabal_store::DocumentStore::new(crate::app_paths::in_data_dir("bootstrap.json")),
         );
         // Peer id of each configured relay, so the reservation below can be
         // requested once the dial actually connects rather than raced against

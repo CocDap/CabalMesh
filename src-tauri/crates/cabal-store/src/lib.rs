@@ -1,26 +1,20 @@
 //! Crash-safe typed persistence.
 //!
-//! # Two problems this fixes
+//! SQLite stores app documents, intent history and account snapshots in one
+//! database per injected app-data directory. Transactions commit complete
+//! changes before callers publish them. Token amounts remain decimal strings.
 //!
-//! **Paths were discovered, not injected.** Storage called a desktop-only
-//! helper to find its own directory. Inside a mobile app sandbox that answer is
-//! wrong, and there is no way for a caller to correct it. Every store here
-//! takes the path it was given; nothing in this crate asks the operating system
-//! where to write.
+//! Existing JSON files are imported once and retained unchanged as backups.
+//! [`JsonStore`] remains available for reading legacy data and for fixtures;
+//! new app persistence uses [`Database`] or [`DocumentStore`]. Encrypted vaults
+//! and platform key storage are owned by their respective crates.
 //!
-//! **Writes were not atomic.** A mobile process is killed without warning —
-//! backgrounded, memory pressure, force-quit — and a truncated `identities.json`
-//! is an unrecoverable wallet loss, not a cache miss. Writes go to a temporary
-//! file in the same directory and are renamed over the target, so a reader sees
-//! either the old file or the new one and never a half-written one.
-//!
-//! # What this crate is not
-//!
-//! Not a database, and deliberately not generic over backends. It persists
-//! small documents that are read whole and written whole, which is exactly what
-//! the app needs and nothing more.
+//! Paths are always injected: this crate never discovers platform directories.
 
 #![forbid(unsafe_code)]
+
+mod sqlite;
+pub use sqlite::{Database, DocumentStore, IntentRow, SnapshotRow, TokenRow, DATABASE_FILE};
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -32,6 +26,10 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum StoreError {
+    #[error("invalid local data at {path}: {reason}")]
+    InvalidData { path: PathBuf, reason: &'static str },
+    #[error("SQLite operation failed at {path}")]
+    Database { path: PathBuf, #[source] source: rusqlite::Error },
     #[error("reading {path} failed")]
     Read {
         path: PathBuf,

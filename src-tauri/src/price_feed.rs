@@ -4,7 +4,7 @@
 //! disk because an offline device can still trade over Bluetooth, and it needs to know
 //! how old the last price it saw is.
 
-use cabal_store::JsonStore;
+use cabal_store::DocumentStore;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
@@ -41,14 +41,14 @@ struct Cache {
 pub struct PriceFeed {
     url: String,
     http: reqwest::Client,
-    store: JsonStore,
+    store: DocumentStore,
     cache: Mutex<Cache>,
 }
 
 impl PriceFeed {
     /// Opens the feed, adopting whatever prices were saved.
     #[must_use]
-    pub fn open(url: &str, http: reqwest::Client, store: JsonStore) -> Self {
+    pub fn open(url: &str, http: reqwest::Client, store: DocumentStore) -> Self {
         let quotes = store.load_or(BTreeMap::new());
         Self {
             url: url.to_string(),
@@ -174,7 +174,7 @@ pub(crate) mod tests {
         PriceFeed::open(
             url,
             reqwest::Client::new(),
-            JsonStore::new(dir.path().join("prices.json")),
+            DocumentStore::new(dir.path().join("prices.json")),
         )
     }
 

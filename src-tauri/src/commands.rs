@@ -47,8 +47,8 @@ mod tests {
             privacy: cabal_core::PrivacyLevel::Low,
         };
         let dir = tempfile::tempdir().unwrap();
-        let ledger = crate::intents::Ledger::open(cabal_store::JsonStore::new(dir.path().join("i.json")));
-        let intent = ledger.create(draft, 1);
+        let ledger = crate::intents::Ledger::open(cabal_store::DocumentStore::new(dir.path().join("i.json"))).unwrap();
+        let intent = ledger.create(draft, 1).unwrap();
 
         let payload = public_payload(&intent).unwrap();
 
@@ -63,7 +63,7 @@ mod tests {
     async fn cancelling_an_unknown_handle_is_not_an_error() {
         // Exercises the registry directly; the command is a thin wrapper and
         // `State` cannot be constructed outside a Tauri app.
-        let state = AppState::new();
+        let state = AppState::new().unwrap();
         state
             .subscriptions()
             .cancel(&SubscriptionId::new("never-registered"));
@@ -72,7 +72,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancelling_twice_is_not_an_error() {
-        let state = AppState::new();
+        let state = AppState::new().unwrap();
         let (id, token) = state.subscriptions().register("mesh-log").unwrap();
 
         state.subscriptions().cancel(&id);
@@ -709,13 +709,14 @@ pub(crate) async fn cached_balances(state: &AppState) -> crate::balances::Balanc
     let Ok(services) = state.services() else {
         return crate::balances::Balances::default();
     };
-    let Some(account) = services.identity.lock().await.primary_account() else {
+    let config = crate::network_config::NetworkConfig::current();
+    let Some(keypair) = services.identity.lock().await.primary_keypair_for(config.network) else {
         return crate::balances::Balances::default();
     };
     crate::balances::Balances::load_for(
         &crate::balances::store(),
-        account.as_str(),
-        crate::network_config::NetworkConfig::current().network,
+        keypair.account_id().as_str(),
+        config.network,
     )
 }
 
@@ -903,7 +904,7 @@ fn parse_draft(fields: &IntentFields, chain: cabal_core::Chain) -> Result<cabal_
     })
 }
 
-/// The five rows the confirm dialog shows, rendered from the draft itself.
+/// The four rows the confirm dialog shows, rendered from the draft itself.
 fn review_rows(draft: &cabal_core::IntentDraft) -> Vec<ReviewRow> {
     use cabal_core::Condition;
 
@@ -924,10 +925,6 @@ fn review_rows(draft: &cabal_core::IntentDraft) -> Vec<ReviewRow> {
             value: format!("{} {}", draft.amount, draft.asset),
         },
         ReviewRow { key: "MODE".into(), value: draft.mode.label().to_string() },
-        ReviewRow {
-            key: "PRIVACY".into(),
-            value: format!("{:?}", draft.privacy).to_uppercase(),
-        },
     ]
 }
 
@@ -1167,7 +1164,7 @@ pub async fn broadcast_intent(
     }
 
     let ledger = state.intents();
-    let intent = ledger.create(draft, crate::intents::now_ms());
+    let intent = ledger.create(draft, crate::intents::now_ms())?;
 
     ledger.record(&intent.id, line("INTENT COMPOSED.", LogTone::Dim));
 
@@ -1801,8 +1798,8 @@ mod intent_tests {
 
     fn ledger() -> (Ledger, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let store = cabal_store::JsonStore::new(dir.path().join("intents.json"));
-        (Ledger::open(store), dir)
+        let store = cabal_store::DocumentStore::new(dir.path().join("intents.json"));
+        (Ledger::open(store).unwrap(), dir)
     }
 
     const TESTNET: cabal_core::Chain = cabal_core::Chain::NearTestnet;
@@ -1846,7 +1843,8 @@ mod intent_tests {
         assert_eq!(value("CONDITION"), "UNDER $95.00");
         assert_eq!(value("AMOUNT"), "1.5 wNEAR");
         assert_eq!(value("MODE"), "SHARK MODE");
-        assert_eq!(value("PRIVACY"), "HIGH");
+        assert_eq!(rows.len(), 4);
+        assert!(!rows.iter().any(|row| row.key == "PRIVACY"));
     }
 
     #[test]
@@ -1927,7 +1925,7 @@ mod intent_tests {
 
     fn negotiated() -> (Ledger, crate::intents::Intent, tempfile::TempDir) {
         let (ledger, dir) = ledger();
-        let intent = ledger.create(draft(), 1_000);
+        let intent = ledger.create(draft(), 1_000).unwrap();
         ledger.advance(&intent.id, IntentStatus::Broadcast { route_len: 1 }, 1_100).unwrap();
         (ledger, intent, dir)
     }
@@ -2029,7 +2027,7 @@ mod intent_tests {
     #[test]
     fn a_row_renders_the_intent_it_was_given() {
         let (ledger, _dir) = ledger();
-        let intent = ledger.create(draft(), 1_000);
+        let intent = ledger.create(draft(), 1_000).unwrap();
         let row = row_for(&intent, 12_400);
 
         assert_eq!(row.title, "BUY wNEAR");
@@ -2045,24 +2043,24 @@ mod intent_tests {
     fn a_non_default_mode_is_badged() {
         let (ledger, _dir) = ledger();
         let ghost = parse_draft(&fields("BUY", "wNEAR", "Any price", "", "1", "GHOST MODE", "HIGH")).unwrap();
-        let intent = ledger.create(ghost, 1_000);
+        let intent = ledger.create(ghost, 1_000).unwrap();
         assert_eq!(row_for(&intent, 1_000).badge.as_deref(), Some("GHOST MODE"));
     }
 
-    // -- the seven-row breakdown -------------------------------------------
+    // -- the six-row breakdown --------------------------------------------
 
     #[test]
-    fn the_breakdown_has_seven_rows_and_invents_no_route() {
+    fn the_breakdown_has_six_rows_and_invents_no_route() {
         let (ledger, _dir) = ledger();
-        let intent = ledger.create(draft(), 1_000);
+        let intent = ledger.create(draft(), 1_000).unwrap();
         let rows = detail_rows(&intent);
 
-        assert_eq!(rows.len(), 7);
-        assert_eq!(rows[5].key, "ROUTE");
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[4].key, "ROUTE");
         // Says so rather than inventing hops — the proof screen renders the
         // same value and calls it evidence.
-        assert_eq!(rows[5].value, "NOT YET ROUTED");
-        assert_eq!(rows[6].value, "NONE YET");
+        assert_eq!(rows[4].value, "NOT YET ROUTED");
+        assert_eq!(rows[5].value, "NONE YET");
     }
 
     // -- ticket 34's load-bearing rule -------------------------------------
@@ -2079,7 +2077,7 @@ mod intent_tests {
         // terminal state.
         let (ledger, _dir) = ledger();
         let registry = crate::subscriptions::Registry::new();
-        let intent = ledger.create(draft(), 1_000);
+        let intent = ledger.create(draft(), 1_000).unwrap();
 
         let (handle, token) = registry.register("settlement").unwrap();
         let (_replay, _receiver) = ledger.watch(&intent.id);
@@ -2136,7 +2134,7 @@ mod intent_tests {
         // deliberate and does end it. If these two ever became the same
         // operation, a navigation would start ending intents.
         let (ledger, _dir) = ledger();
-        let intent = ledger.create(draft(), 1_000);
+        let intent = ledger.create(draft(), 1_000).unwrap();
         ledger
             .advance(&intent.id, IntentStatus::Broadcast { route_len: 2 }, 1_100)
             .unwrap();
@@ -2153,7 +2151,7 @@ mod intent_tests {
     #[test]
     fn a_settled_intent_yields_the_hash_it_settled_with() {
         let (ledger, _dir) = ledger();
-        let intent = ledger.create(draft(), 1_000);
+        let intent = ledger.create(draft(), 1_000).unwrap();
         ledger
             .advance(&intent.id, IntentStatus::Broadcast { route_len: 1 }, 1_100)
             .unwrap();
@@ -2227,8 +2225,7 @@ pub async fn vault_assets(state: State<'_, AppState>) -> Result<Vec<VaultRow>, A
 #[tauri::command]
 pub async fn vault_refresh_balance(state: State<'_, AppState>) -> Result<Vec<VaultRow>, AppError> {
     let services = state.services()?;
-    let bridge = services.near().await?;
-    let config = crate::network_config::NetworkConfig::current();
+    let (bridge, config) = services.near_context().await?;
     let balances = read_and_cache(&bridge, config.network).await?;
     Ok(vault_rows(&balances, &config.near()))
 }
@@ -2237,12 +2234,18 @@ pub async fn vault_refresh_balance(state: State<'_, AppState>) -> Result<Vec<Vau
 async fn read_and_cache(
     bridge: &crate::near_bridge::NearBridge,
     network: crate::network_config::Network,
-) -> Result<crate::balances::Balances, crate::near_bridge::NearError> {
+) -> Result<crate::balances::Balances, AppError> {
+    read_and_cache_in(bridge, network, &crate::balances::store()).await
+}
+
+async fn read_and_cache_in(
+    bridge: &crate::near_bridge::NearBridge,
+    network: crate::network_config::Network,
+    store: &crate::balances::BalanceStore,
+) -> Result<crate::balances::Balances, AppError> {
     let balances =
         crate::balances::Balances::read(bridge, network, &crate::network_config::assets(network.chain())).await?;
-    if let Err(error) = crate::balances::store().save(&balances) {
-        tracing::warn!(target: "cabalmesh::vault", %error, "could not cache balances");
-    }
+    store.save(&balances).map_err(AppError::local_storage)?;
     Ok(balances)
 }
 
@@ -2264,7 +2267,7 @@ fn vault_rows(balances: &crate::balances::Balances, near: &crate::network_config
         });
     }
     for spec in [&near.base, &near.quote] {
-        let Some(token) = balances.tokens.get(spec.symbol) else {
+        let Some(token) = balances.token_for(spec) else {
             continue;
         };
         if let Some(amount) = plain_amount(&token.in_intents, spec.decimals) {
@@ -2327,6 +2330,57 @@ mod vault_amount_tests {
         assert!(near_amount("DOGE", "1").is_err());
         assert!(near_amount("USDC", "0").is_err(), "moving nothing is a mistake");
     }
+
+    #[tokio::test]
+    async fn failed_refresh_preserves_the_entire_previous_snapshot() {
+        use crate::{balances::{BalanceStore, Balances, TokenBalance}, network_config::Network};
+        use crate::near_bridge::{NearBridge, testing::{MockRpc, view_result}};
+        let network = Network::Testnet;
+        let rpc = MockRpc::serve(move |_, params| {
+            if params["account_id"] == network.near().quote.contract {
+                return serde_json::json!({"error":{"message":"temporary RPC failure"}});
+            }
+            view_result(&serde_json::json!("999"))
+        }).await;
+        let bridge = NearBridge::new(rpc.url.clone(),network.near().verifier,cabal_near::NearKeypair::from_secret_bytes(&[7;32]),reqwest::Client::new()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = BalanceStore::new(dir.path().join("near_balances.json"));
+        let old = Balances { account: bridge.account_id().to_string(), network: Some(network), native: Some("123".into()),
+            tokens: std::collections::BTreeMap::from([("USDC".into(),TokenBalance {wallet:"10".into(),in_intents:"20".into()})]), ..Default::default() };
+        store.save(&old).unwrap();
+        let database = rusqlite::Connection::open(dir.path().join(cabal_store::DATABASE_FILE)).unwrap();
+        let updated: i64 = database.query_row("SELECT updated_ms FROM account_snapshots",[],|row|row.get(0)).unwrap();
+        assert!(read_and_cache_in(&bridge,network,&store).await.is_err());
+        assert_eq!(store.load(&old.account,network).unwrap(),old);
+        assert_eq!(database.query_row("SELECT updated_ms FROM account_snapshots",[],|row|row.get::<_,i64>(0)).unwrap(),updated);
+    }
+
+    #[tokio::test]
+    async fn completed_refresh_saves_assets_and_tokens_but_a_failed_save_rolls_back() {
+        use crate::{balances::BalanceStore, network_config::Network};
+        use crate::near_bridge::{NearBridge, testing::{MockRpc, view_result}};
+        let network = Network::Testnet;
+        let rpc = MockRpc::serve(|_, params| {
+            if params["request_type"] == "view_account" {
+                return serde_json::json!({"error":{"cause":{"name":"UNKNOWN_ACCOUNT"}}});
+            }
+            view_result(&serde_json::json!("7"))
+        }).await;
+        let bridge = NearBridge::new(rpc.url.clone(),network.near().verifier,cabal_near::NearKeypair::from_secret_bytes(&[8;32]),reqwest::Client::new()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = BalanceStore::new(dir.path().join("near_balances.json"));
+        let fresh = read_and_cache_in(&bridge,network,&store).await.unwrap();
+        assert_eq!(fresh,store.load(bridge.account_id().as_str(),network).unwrap());
+        let database = rusqlite::Connection::open(dir.path().join(cabal_store::DATABASE_FILE)).unwrap();
+        let count: u32 = database.query_row("SELECT COUNT(*) FROM assets",[],|row|row.get(0)).unwrap();
+        assert_eq!(count,3,"test wNEAR, USDC and NEAR-backed wNEAR are distinct assets");
+        assert!(!dir.path().join("near_balances.json").exists());
+        let updated: i64 = database.query_row("SELECT updated_ms FROM account_snapshots",[],|row|row.get(0)).unwrap();
+        database.execute_batch("CREATE TRIGGER fail_refresh BEFORE INSERT ON account_tokens BEGIN SELECT RAISE(ABORT,'test storage failure'); END").unwrap();
+        assert!(matches!(read_and_cache_in(&bridge,network,&store).await,Err(AppError::LocalStorage)));
+        assert_eq!(store.load(bridge.account_id().as_str(),network).unwrap(),fresh);
+        assert_eq!(database.query_row("SELECT updated_ms FROM account_snapshots",[],|row|row.get::<_,i64>(0)).unwrap(),updated);
+    }
 }
 
 /// One token's place in the NEAR card.
@@ -2372,8 +2426,8 @@ pub struct NearAccountView {
 #[tauri::command]
 pub async fn near_account(state: State<'_, AppState>) -> Result<NearAccountView, AppError> {
     let services = state.services()?;
-    let account = services.identity.lock().await.primary_account().ok_or(AppError::VaultLocked)?;
     let config = crate::network_config::NetworkConfig::current();
+    let account = services.identity.lock().await.primary_keypair_for(config.network).ok_or(AppError::VaultLocked)?.account_id();
     let near = config.near();
     let balances = crate::balances::Balances::load_for(&crate::balances::store(), account.as_str(), config.network);
 
@@ -2390,7 +2444,7 @@ pub async fn near_account(state: State<'_, AppState>) -> Result<NearAccountView,
         tokens: [near.base, near.quote]
             .iter()
             .map(|spec| {
-                let token = balances.tokens.get(spec.symbol);
+                let token = balances.token_for(spec);
                 NearTokenView {
                     symbol: spec.symbol.to_string(),
                     decimals: spec.decimals,
@@ -2404,13 +2458,18 @@ pub async fn near_account(state: State<'_, AppState>) -> Result<NearAccountView,
 }
 
 /// The token a symbol names on this network, and `amount` in its raw units.
+#[cfg(test)]
 fn near_amount(token: &str, amount: &str) -> Result<(crate::network_config::AssetSpec, u128), AppError> {
+    near_amount_on(token, amount, crate::network_config::NetworkConfig::current().network)
+}
+
+fn near_amount_on(token: &str, amount: &str, network: crate::network_config::Network) -> Result<(crate::network_config::AssetSpec, u128), AppError> {
     use crate::error::InvalidReason;
 
     let spec = if token == "NEAR" {
         crate::network_config::AssetSpec { symbol: "NEAR", code: "NEA", decimals: NATIVE_DECIMALS,
-            contract: crate::network_config::NetworkConfig::current().near().wrapped_native }
-    } else { crate::network_config::assets(device_chain())
+            contract: network.near().wrapped_native }
+    } else { crate::network_config::assets(network.chain())
         .into_iter()
         .find(|spec| spec.symbol == token)
         .ok_or(AppError::InvalidIntent { field: "token", reason: InvalidReason::Malformed })? };
@@ -2432,16 +2491,16 @@ fn near_amount(token: &str, amount: &str) -> Result<(crate::network_config::Asse
 /// if the chain refused or could not be reached.
 #[tauri::command]
 pub async fn near_deposit(token: String, amount: String, state: State<'_, AppState>) -> Result<String, AppError> {
-    let (spec, raw) = near_amount(&token, &amount)?;
     let services = state.services()?;
-    let bridge = services.near().await?;
+    let (bridge, config) = services.near_context().await?;
+    let (spec, raw) = near_amount_on(&token, &amount, config.network)?;
     let result = if token == "NEAR" {
-        ensure_native_verifier()?;
+        ensure_native_verifier(&config)?;
         bridge.deposit_native(spec.contract, raw).await
     } else { bridge.deposit(spec.contract, raw).await };
     // The money has moved whatever this read does, so its failure is not the
     // command's: the next refresh will catch up.
-    let _ = read_and_cache(&bridge, crate::network_config::NetworkConfig::current().network).await;
+    let _ = read_and_cache(&bridge, config.network).await;
     let tx = result?;
     Ok(tx.0)
 }
@@ -2455,14 +2514,14 @@ pub async fn near_deposit(token: String, amount: String, state: State<'_, AppSta
 /// As [`near_deposit`].
 #[tauri::command]
 pub async fn near_withdraw(token: String, amount: String, state: State<'_, AppState>) -> Result<String, AppError> {
-    let (spec, raw) = near_amount(&token, &amount)?;
     let services = state.services()?;
-    let bridge = services.near().await?;
+    let (bridge, config) = services.near_context().await?;
+    let (spec, raw) = near_amount_on(&token, &amount, config.network)?;
     let result = if token == "NEAR" {
-        ensure_native_verifier()?;
+        ensure_native_verifier(&config)?;
         bridge.withdraw_native(spec.contract, raw, crate::intents::now_ms()).await
     } else { bridge.withdraw(spec.contract, raw, crate::intents::now_ms()).await };
-    let _ = read_and_cache(&bridge, crate::network_config::NetworkConfig::current().network).await;
+    let _ = read_and_cache(&bridge, config.network).await;
     let tx = result?;
     Ok(tx.0)
 }
@@ -2470,16 +2529,15 @@ pub async fn near_withdraw(token: String, amount: String, state: State<'_, AppSt
 /// Unwrap NEAR-backed tokens already held in this wallet, without debiting Intents.
 #[tauri::command]
 pub async fn near_unwrap(amount: String, state: State<'_, AppState>) -> Result<String, AppError> {
-    ensure_native_verifier()?;
-    let (spec, raw) = near_amount("NEAR", &amount)?;
-    let bridge = state.services()?.near().await?;
+    let (bridge, config) = state.services()?.near_context().await?;
+    ensure_native_verifier(&config)?;
+    let (spec, raw) = near_amount_on("NEAR", &amount, config.network)?;
     let result = bridge.unwrap_native(spec.contract, raw).await;
-    let _ = read_and_cache(&bridge, crate::network_config::NetworkConfig::current().network).await;
+    let _ = read_and_cache(&bridge, config.network).await;
     Ok(result?.0)
 }
 
-fn ensure_native_verifier() -> Result<(), AppError> {
-    let config = crate::network_config::NetworkConfig::current();
+fn ensure_native_verifier(config: &crate::network_config::NetworkConfig) -> Result<(), AppError> {
     if config.verifier() != config.near().verifier {
         return Err(AppError::Unsupported { feature: "native NEAR on a custom verifier" });
     }
@@ -2729,7 +2787,7 @@ pub struct ProfileView {
 #[tauri::command]
 pub async fn profile_summary(state: State<'_, AppState>) -> Result<ProfileView, AppError> {
     let services = state.services()?;
-    let network = crate::network_config::NetworkConfig::load(&cabal_store::JsonStore::new(
+    let network = crate::network_config::NetworkConfig::load(&cabal_store::DocumentStore::new(
         crate::app_paths::in_data_dir("network.json"),
     ));
 
@@ -2786,7 +2844,7 @@ pub async fn network_set(mainnet: bool) -> Result<(), AppError> {
         crate::network_config::Network::Testnet
     };
     crate::network_config::NetworkConfig::switch(
-        &cabal_store::JsonStore::new(crate::app_paths::in_data_dir("network.json")),
+        &cabal_store::DocumentStore::new(crate::app_paths::in_data_dir("network.json")),
         network,
     )
     .map_err(AppError::internal)

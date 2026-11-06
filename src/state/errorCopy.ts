@@ -16,6 +16,8 @@ export function errorCopy(failure: unknown): string {
   if (!error) return "The request was refused. Nothing was sent.";
 
   switch (error.kind) {
+    case "local_storage":
+      return "Could not save data on this device. Check available storage and try again.";
     case "not_ready":
       return "Still connecting. Nothing has been sent.";
     case "unsupported":

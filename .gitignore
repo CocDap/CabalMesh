@@ -7,6 +7,10 @@ dist/
 src-tauri/target/
 src-tauri/gen/schemas
 
+# Local runtime data, including SQLite WAL files and encrypted vaults.
+/cabalmesh-data/
+/src-tauri/cabalmesh-data/
+
 # Gradle output for the mobile plugins.
 #
 # Tauri's own generated project (src-tauri/gen/android) ships .gitignore files

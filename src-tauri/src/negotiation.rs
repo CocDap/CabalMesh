@@ -711,12 +711,12 @@ mod tests {
     /// A device with one open intent, a price from noon, and `client` for its model.
     async fn device(draft: IntentDraft, client: LlmClient) -> Side_ {
         let dir = tempfile::tempdir().unwrap();
-        let ledger = Ledger::open(cabal_store::JsonStore::new(dir.path().join("intents.json")));
+        let ledger = Ledger::open(cabal_store::DocumentStore::new(dir.path().join("intents.json"))).unwrap();
         // An id comes from the clock and a per-ledger serial, so two fresh ledgers need
         // two different times to be two different devices.
         static CREATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(NOON_MS);
         let created = CREATED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let own = ledger.create(draft, created);
+        let own = ledger.create(draft, created).unwrap();
         ledger
             .advance(&own.id, IntentStatus::Broadcast { route_len: 1 }, NOON_MS)
             .unwrap();
@@ -1100,7 +1100,7 @@ mod tests {
             let own = seller
                 .node
                 .ledger
-                .create(draft(Action::Sell, above(FLOOR)), NOON_MS);
+                .create(draft(Action::Sell, above(FLOOR)), NOON_MS).unwrap();
             seller
                 .node
                 .ledger

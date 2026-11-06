@@ -6,7 +6,7 @@
 //! be locked at startup.
 
 use cabal_near::{AccountId, NearKeypair};
-use cabal_store::JsonStore;
+use cabal_store::{DocumentStore, JsonStore};
 use cabal_vault::{Secret, Vault};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -100,7 +100,7 @@ impl IdentityStore {
         let vault_salt_path = app_dir.join("vault.salt");
         let security_state_path = app_dir.join("security.json");
 
-        let security = crate::security_state::SecurityState::load(&JsonStore::new(security_state_path.clone()));
+        let security = crate::security_state::SecurityState::load(&DocumentStore::new(security_state_path.clone()));
         let (provider, locked): (Box<dyn cabal_vault::KeyProvider>, bool) = match security.mode {
             crate::security_state::UnlockMode::File => {
                 (Box::new(crate::vault_key::platform_provider(vault_key_path.clone())), false)
@@ -158,7 +158,7 @@ impl IdentityStore {
     /// rather than cached, so it can never drift from what `enable_passphrase`
     /// / `disable_passphrase` last committed.
     pub fn security_mode(&self) -> crate::security_state::UnlockMode {
-        crate::security_state::SecurityState::load(&JsonStore::new(self.security_state_path.clone())).mode
+        crate::security_state::SecurityState::load(&DocumentStore::new(self.security_state_path.clone())).mode
     }
 
     /// Supplies the passphrase for a vault in `UnlockMode::Passphrase`.
@@ -293,7 +293,7 @@ impl IdentityStore {
         let _ = fs::remove_file(&self.vault_key_path);
 
         crate::security_state::SecurityState { mode: crate::security_state::UnlockMode::Passphrase }
-            .save(&JsonStore::new(self.security_state_path.clone()))?;
+            .save(&DocumentStore::new(self.security_state_path.clone()))?;
         Ok(())
     }
 
@@ -325,7 +325,7 @@ impl IdentityStore {
         let _ = fs::remove_file(&self.vault_salt_path);
 
         crate::security_state::SecurityState { mode: crate::security_state::UnlockMode::File }
-            .save(&JsonStore::new(self.security_state_path.clone()))?;
+            .save(&DocumentStore::new(self.security_state_path.clone()))?;
         Ok(())
     }
 
@@ -465,6 +465,10 @@ impl IdentityStore {
         self.identities.first()?.keypair()
     }
 
+    pub(crate) fn primary_keypair_for(&self, network: crate::network_config::Network) -> Option<NearKeypair> {
+        self.identities.first()?.keypair_for(network)
+    }
+
     /// The NEAR account, or `None` while the vault is locked.
     #[must_use]
     pub fn primary_account(&self) -> Option<AccountId> {
@@ -592,7 +596,7 @@ mod security_tests {
         let vault_salt_path = tmp_dir.join("vault.salt");
         let security_state_path = tmp_dir.join("security.json");
 
-        let security = crate::security_state::SecurityState::load(&JsonStore::new(security_state_path.clone()));
+        let security = crate::security_state::SecurityState::load(&DocumentStore::new(security_state_path.clone()));
         let (provider, locked): (Box<dyn cabal_vault::KeyProvider>, bool) = match security.mode {
             crate::security_state::UnlockMode::File => {
                 (Box::new(crate::vault_key::platform_provider(vault_key_path.clone())), false)
@@ -822,7 +826,7 @@ mod security_tests {
             .save(&serde_json::json!([{ "alias": "Fox", "emoji": "🦊" }]))
             .unwrap();
         crate::security_state::SecurityState { mode: crate::security_state::UnlockMode::Passphrase }
-            .save(&JsonStore::new(tmp_dir.join("security.json")))
+            .save(&DocumentStore::new(tmp_dir.join("security.json")))
             .unwrap();
 
         let mut locked = bridge_from_disk(&tmp_dir);

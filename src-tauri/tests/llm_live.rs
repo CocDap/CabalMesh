@@ -6,7 +6,7 @@
 
 use cabal_core::{Chain, IntentId};
 use cabal_negotiation::{Bound, Side};
-use cabal_store::JsonStore;
+use cabal_store::DocumentStore;
 use cabalmesh_lib::agent::{self, Decision};
 use cabalmesh_lib::agent_tools::ToolContext;
 use cabalmesh_lib::llm_budget::LlmBudget;
@@ -56,7 +56,7 @@ async fn live_context(
     let feed = PriceFeed::open(
         Network::Testnet.near().price_feed,
         reqwest::Client::new(),
-        JsonStore::new(dir.path().join("prices.json")),
+        DocumentStore::new(dir.path().join("prices.json")),
     );
     let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap();
     let market = feed

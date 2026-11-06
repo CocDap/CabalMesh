@@ -212,7 +212,7 @@ impl NetworkConfig {
     /// # Errors
     ///
     /// [`cabal_store::StoreError`] if the file cannot be written.
-    pub fn switch(store: &cabal_store::JsonStore, network: Network) -> Result<(), cabal_store::StoreError> {
+    pub fn switch(store: &cabal_store::DocumentStore, network: Network) -> Result<(), cabal_store::StoreError> {
         let mut config: Self = store.load_or(Self::default());
         config.network = network;
         store.save(&config)
@@ -221,7 +221,7 @@ impl NetworkConfig {
     /// Loads configuration, layering: compiled-in defaults, then the config
     /// file, then environment variables on desktop.
     #[must_use]
-    pub fn load(store: &cabal_store::JsonStore) -> Self {
+    pub fn load(store: &cabal_store::DocumentStore) -> Self {
         let mut config: Self = store.load_or(Self::default());
 
         #[cfg(desktop)]
@@ -233,7 +233,7 @@ impl NetworkConfig {
     /// The configuration in the app's data directory.
     #[must_use]
     pub fn current() -> Self {
-        Self::load(&cabal_store::JsonStore::new(crate::app_paths::in_data_dir("network.json")))
+        Self::load(&cabal_store::DocumentStore::new(crate::app_paths::in_data_dir("network.json")))
     }
 
     #[cfg(desktop)]
@@ -353,7 +353,7 @@ mod tests {
         let path = dir.path().join("network.json");
         std::fs::write(&path, r#"{"network":"fuji","rpcUrl":"https://example.test"}"#).unwrap();
 
-        let store = cabal_store::JsonStore::new(&path);
+        let store = cabal_store::DocumentStore::new(&path);
         assert!(store.load::<NetworkConfig>().is_err(), "the name is not known");
         assert_eq!(NetworkConfig::load(&store).network, Network::Testnet);
     }
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn switching_network_persists_and_is_read_back() {
         let dir = TempDir::new().unwrap();
-        let store = cabal_store::JsonStore::new(dir.path().join("network.json"));
+        let store = cabal_store::DocumentStore::new(dir.path().join("network.json"));
 
         NetworkConfig::switch(&store, Network::Mainnet).unwrap();
 
@@ -382,7 +382,7 @@ mod tests {
     #[test]
     fn switching_network_preserves_other_config_fields() {
         let dir = TempDir::new().unwrap();
-        let store = cabal_store::JsonStore::new(dir.path().join("network.json"));
+        let store = cabal_store::DocumentStore::new(dir.path().join("network.json"));
         store
             .save(&NetworkConfig {
                 network: Network::Testnet,
@@ -406,7 +406,7 @@ mod tests {
         let path = dir.path().join("network.json");
         std::fs::write(&path, r#"{"network":"mainnet"}"#).unwrap();
 
-        let config = NetworkConfig::load(&cabal_store::JsonStore::new(&path));
+        let config = NetworkConfig::load(&cabal_store::DocumentStore::new(&path));
         assert_eq!(config.network, Network::Mainnet);
         assert!(!config.network.is_testnet());
     }

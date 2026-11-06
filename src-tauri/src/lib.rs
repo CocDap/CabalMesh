@@ -121,7 +121,7 @@ pub fn run() {
                 ),
             }
 
-            let state = state::AppState::new();
+            let state = state::AppState::new()?;
             app.manage(state.clone());
 
             let app_handle = app.handle().clone();
@@ -161,7 +161,7 @@ pub fn run() {
                 let price_feed = Arc::new(price_feed::PriceFeed::open(
                     network_config::NetworkConfig::current().near().price_feed,
                     http.clone(),
-                    cabal_store::JsonStore::new(app_paths::in_data_dir("near_prices.json")),
+                    cabal_store::DocumentStore::new(app_paths::in_data_dir("near_prices.json")),
                 ));
                 let tick_state = state.clone();
                 tokio::spawn(async move {

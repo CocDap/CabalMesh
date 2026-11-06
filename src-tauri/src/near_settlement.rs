@@ -85,7 +85,7 @@ struct Entry {
     arrived: u64,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct BookFile {
     deals: BTreeMap<String, Entry>,
     next: u64,
@@ -96,7 +96,7 @@ struct BookFile {
 #[derive(Clone)]
 pub struct DiffBook {
     file: Arc<Mutex<BookFile>>,
-    store: Arc<cabal_store::JsonStore>,
+    store: Arc<cabal_store::DocumentStore>,
     /// Being submitted right now. Not persisted: a crash mid-submission should
     /// retry, and the verifier refuses a real duplicate.
     in_flight: Arc<Mutex<HashSet<String>>>,
@@ -105,14 +105,14 @@ pub struct DiffBook {
 }
 
 impl DiffBook {
-    #[must_use]
-    pub fn open(store: cabal_store::JsonStore) -> Self {
-        Self {
-            file: Arc::new(Mutex::new(store.load_or(BookFile::default()))),
+    pub fn open(store: cabal_store::DocumentStore) -> Result<Self, cabal_store::StoreError> {
+        let file = store.load_optional()?.unwrap_or_default();
+        Ok(Self {
+            file: Arc::new(Mutex::new(file)),
             store: Arc::new(store),
             in_flight: Arc::default(),
             noted: Arc::default(),
-        }
+        })
     }
 
     fn persist(&self, file: &BookFile) {
@@ -124,24 +124,29 @@ impl DiffBook {
     /// Holds one half. Returns the pair, ordered `[sell, buy]`, at the one
     /// moment it completes. The first valid diff for a side stays.
     pub fn insert(&self, deal_id: &str, side: Action, payload: MultiPayload) -> Option<[MultiPayload; 2]> {
-        self.place(deal_id, side, payload, false)
+        self.place(deal_id, side, payload, false).unwrap_or_else(|error| {
+            crate::error::AppError::local_storage(error);
+            None
+        })
     }
 
     /// Holds this device's own signature, replacing whatever a peer put in its
     /// slot: deal ids are public, so one could have got there first.
-    fn hold_own(&self, deal_id: &str, side: Action, payload: MultiPayload) {
-        let _ = self.place(deal_id, side, payload, true);
+    fn hold_own(&self, deal_id: &str, side: Action, payload: MultiPayload) -> Result<(), cabal_store::StoreError> {
+        self.place(deal_id, side, payload, true).map(|_| ())
     }
 
-    fn place(&self, deal_id: &str, side: Action, payload: MultiPayload, replace: bool) -> Option<[MultiPayload; 2]> {
-        side_label(side)?;
+    fn place(&self, deal_id: &str, side: Action, payload: MultiPayload, replace: bool) -> Result<Option<[MultiPayload; 2]>, cabal_store::StoreError> {
+        if side_label(side).is_none() { return Ok(None); }
         let mut file = self.file.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = file.clone();
         let arrived = file.next;
         file.next += 1;
         let entry = file.deals.entry(deal_id.to_owned()).or_insert_with(|| Entry { arrived, ..Entry::default() });
         let slot = if side == Action::Sell { &mut entry.sell } else { &mut entry.buy };
         if slot.is_some() && !replace {
-            return None;
+            file.next = arrived;
+            return Ok(None);
         }
         *slot = Some(payload);
         let pair = match (&entry.sell, &entry.buy) {
@@ -154,8 +159,11 @@ impl DiffBook {
             };
             file.deals.remove(&oldest);
         }
-        self.persist(&file);
-        pair
+        if let Err(error) = self.store.save(&*file) {
+            *file = before;
+            return Err(error);
+        }
+        Ok(pair)
     }
 
     /// Takes a complete, unsubmitted pair for submission, or `None` if there is
@@ -210,18 +218,18 @@ impl DiffBook {
 
 /// Where the last verifier salt is remembered.
 #[must_use]
-pub fn salt_store() -> cabal_store::JsonStore {
-    cabal_store::JsonStore::new(crate::app_paths::in_data_dir("near_salt.json"))
+pub fn salt_store() -> cabal_store::DocumentStore {
+    cabal_store::DocumentStore::new(crate::app_paths::in_data_dir("near_salt.json"))
 }
 
 /// The verifier salt a signature carries, remembered for signing offline.
 #[must_use]
-pub fn cached_salt(store: &cabal_store::JsonStore) -> Option<[u8; 4]> {
+pub fn cached_salt(store: &cabal_store::DocumentStore) -> Option<[u8; 4]> {
     let hex_salt: String = store.load().ok()?;
     hex::decode(hex_salt).ok()?.try_into().ok()
 }
 
-pub fn remember_salt(store: &cabal_store::JsonStore, salt: [u8; 4]) {
+pub fn remember_salt(store: &cabal_store::DocumentStore, salt: [u8; 4]) {
     if let Err(error) = store.save(&hex::encode(salt)) {
         tracing::warn!(target: "cabalmesh::settlement", %error, "could not persist the verifier salt");
     }
@@ -293,7 +301,10 @@ pub fn sign_own_half(
     }
     let nonce = fresh_nonce(salt, deadline);
     let payload = sign_half(keypair, verifier, near, intent.draft.action, base_raw, quote_raw, deadline, nonce);
-    book.hold_own(&terms.id, intent.draft.action, payload.clone());
+    if let Err(error) = book.hold_own(&terms.id, intent.draft.action, payload.clone()) {
+        crate::error::AppError::local_storage(error);
+        return None;
+    }
 
     Some(SignedDiff { deal_id: terms.id.clone(), chain: intent.draft.chain, side: side.to_owned(), payload })
 }
@@ -641,8 +652,8 @@ mod tests {
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         Fixture {
-            ledger: Ledger::open(cabal_store::JsonStore::new(dir.path().join("intents.json"))),
-            book: DiffBook::open(cabal_store::JsonStore::new(dir.path().join("diffs.json"))),
+            ledger: Ledger::open(cabal_store::DocumentStore::new(dir.path().join("intents.json"))).unwrap(),
+            book: DiffBook::open(cabal_store::DocumentStore::new(dir.path().join("diffs.json"))).unwrap(),
             _dir: dir,
         }
     }
@@ -668,7 +679,7 @@ mod tests {
             mode: ExecutionMode::Shark,
             privacy: PrivacyLevel::Low,
         };
-        let intent = fx.ledger.create(draft, now_ms());
+        let intent = fx.ledger.create(draft, now_ms()).unwrap();
         fx.ledger.advance(&intent.id, IntentStatus::Broadcast { route_len: 1 }, now_ms()).unwrap();
         fx.ledger.propose_deal(&intent.id, deal, UsdPrice::from_cents(404), "target");
         fx.ledger.mark_signed(&intent.id, deadline_from(now_ms()));
@@ -756,11 +767,35 @@ mod tests {
     #[test]
     fn held_pairs_survive_a_restart() {
         let dir = tempfile::tempdir().unwrap();
-        let open = || DiffBook::open(cabal_store::JsonStore::new(dir.path().join("diffs.json")));
+        let open = || DiffBook::open(cabal_store::DocumentStore::new(dir.path().join("diffs.json"))).unwrap();
         let book = open();
         book.insert("d", Action::Sell, half(1, Action::Sell));
         book.insert("d", Action::Buy, half(2, Action::Buy));
         assert_eq!(open().held(), vec!["d".to_owned()]);
+    }
+
+    #[test]
+    fn failed_diff_write_does_not_hold_or_publish_a_signature() {
+        let fx = fixture();
+        let database = fx.book.store.database().unwrap();
+        let connection = rusqlite::Connection::open(database.path()).unwrap();
+        connection.execute_batch("CREATE TRIGGER fail_diff BEFORE INSERT ON documents BEGIN SELECT RAISE(ABORT,'test write failure'); END;").unwrap();
+        assert!(fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).is_err());
+        assert!(fx.book.half("d", Action::Sell).is_none());
+        assert!(fx.book.insert("d", Action::Buy, half(2, Action::Buy)).is_none());
+        assert!(fx.book.held().is_empty());
+        connection.execute_batch("DROP TRIGGER fail_diff").unwrap();
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
+        assert!(fx.book.half("d", Action::Sell).is_some());
+    }
+
+    #[test]
+    fn invalid_legacy_diff_queue_is_preserved_and_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("diffs.json");
+        std::fs::write(&path, "incomplete legacy queue").unwrap();
+        assert!(DiffBook::open(cabal_store::DocumentStore::new(&path)).is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "incomplete legacy queue");
     }
 
     #[test]
@@ -996,7 +1031,7 @@ mod tests {
             mode: ExecutionMode::Shark,
             privacy: PrivacyLevel::Low,
         };
-        let intent = fx.ledger.create(draft, now_ms());
+        let intent = fx.ledger.create(draft, now_ms()).unwrap();
         fx.ledger.advance(&intent.id, IntentStatus::Broadcast { route_len: 1 }, now_ms()).unwrap();
         fx.ledger.propose_deal(&intent.id, "d", UsdPrice::from_cents(404), "target");
         let report = serde_json::to_string(&SettlementComplete {
@@ -1046,7 +1081,7 @@ mod tests {
             mode: ExecutionMode::Shark,
             privacy: PrivacyLevel::Low,
         };
-        let intent = fx.ledger.create(draft, now_ms());
+        let intent = fx.ledger.create(draft, now_ms()).unwrap();
         fx.ledger.propose_deal(&intent.id, deal, UsdPrice::from_cents(404), "target");
         fx.ledger.get(&intent.id).unwrap()
     }

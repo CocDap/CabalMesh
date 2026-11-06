@@ -166,7 +166,7 @@ async fn runaway_subscriptions_are_refused_rather_than_unbounded() {
 /// exist, so a registry that arrived with bootstrap would be too late.
 #[tokio::test]
 async fn the_registry_is_usable_before_bootstrap() {
-    let state = AppState::new();
+    let state = AppState::new().unwrap();
     assert!(state.services().is_err(), "precondition: not bootstrapped");
 
     let (id, token) = state
