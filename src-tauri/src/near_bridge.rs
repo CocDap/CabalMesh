@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+mod native;
+
 /// Signed intents expire this long after signing.
 pub const INTENT_LIFETIME_MS: u64 = 3_600_000;
 
@@ -32,6 +34,10 @@ pub enum NearError {
     /// The account has no native NEAR on-chain, so it cannot pay for gas.
     #[error("account {account} has no NEAR for gas")]
     AccountNotFunded { account: String },
+    #[error("NEAR balance must cover the amount, storage and gas")]
+    InsufficientNative,
+    #[error("native transfer could not be confirmed")]
+    NativeTransferUnconfirmed { transaction: Option<String> },
     #[error("RPC error: {0}")]
     Rpc(String),
     /// The verifier or the chain refused. The reason comes from the contract.
@@ -393,6 +399,11 @@ impl NearBridge {
     /// Reads the access key nonce and a recent block, signs, sends, and waits
     /// for finality.
     async fn send(&self, receiver: AccountId, call: FunctionCall) -> Result<TxHash, NearError> {
+        self.send_calls(receiver, &[call]).await.map(|(hash, _)| hash)
+    }
+
+    /// Calls sharing a receiver are signed in one transaction, in this order.
+    async fn send_calls(&self, receiver: AccountId, calls: &[FunctionCall]) -> Result<(TxHash, Value), NearError> {
         let account = self.account_id();
         let not_funded = || NearError::AccountNotFunded { account: account.to_string() };
 
@@ -424,7 +435,7 @@ impl NearBridge {
             .and_then(|bytes| bytes.try_into().ok())
             .ok_or_else(|| NearError::Rpc("block had no hash".into()))?;
 
-        let signed = sign_function_calls(&self.keypair, &receiver, nonce, block_hash, &[call]);
+        let signed = sign_function_calls(&self.keypair, &receiver, nonce, block_hash, calls);
         let params = json!({ "signed_tx_base64": signed, "wait_until": "FINAL" });
         let outcome = self.rpc("send_tx", params).await.map_err(|error| match error {
             // Zero balance reaches the node as a transaction-level refusal.
@@ -445,11 +456,12 @@ impl NearBridge {
                 });
             return Err(NearError::Rejected(first.unwrap_or(failure).to_string()));
         }
-        outcome
+        let hash = outcome
             .pointer("/transaction/hash")
             .and_then(Value::as_str)
             .map(|hash| TxHash(hash.to_owned()))
-            .ok_or_else(|| NearError::Rpc("send_tx returned no hash".into()))
+            .ok_or_else(|| NearError::Rpc("send_tx returned no hash".into()))?;
+        Ok((hash, outcome))
     }
 }
 

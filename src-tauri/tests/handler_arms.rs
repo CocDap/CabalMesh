@@ -55,6 +55,7 @@ const SHARED: &[&str] = &[
     "near_account",
     "near_deposit",
     "near_withdraw",
+    "near_unwrap",
     "parse_intent_chat",
     "preview_intent",
     "profile_summary",

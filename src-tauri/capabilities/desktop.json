@@ -54,6 +54,7 @@
     "allow-wallet-create-testnet-account",
     "allow-near-deposit",
     "allow-near-withdraw",
+    "allow-near-unwrap",
     "allow-vault-assets",
     "allow-vault-refresh-balance",
     "allow-vault-export-key",

@@ -83,6 +83,10 @@ pub enum AppError {
     /// names the account and says to fund it.
     #[error("account has no NEAR for gas")]
     NearAccountNotFunded { account: String },
+    #[error("NEAR balance must also cover storage and gas")]
+    InsufficientNative,
+    #[error("native transfer needs confirmation")]
+    NativeTransferUnconfirmed { transaction: Option<String> },
 
     /// Key material is not available — the vault is locked or the platform
     /// keystore refused.
@@ -198,6 +202,8 @@ impl AppError {
             Self::Unsupported { .. }
             | Self::InvalidIntent { .. }
             | Self::NearAccountNotFunded { .. }
+            | Self::InsufficientNative
+            | Self::NativeTransferUnconfirmed { .. }
             | Self::VaultLocked
             | Self::TooManySubscriptions { .. }
             | Self::Internal => false,
@@ -229,6 +235,8 @@ impl From<crate::near_bridge::NearError> for AppError {
         tracing::warn!(target: "cabalmesh::error", %error, "chain call failed");
         match error {
             N::AccountNotFunded { account } => Self::NearAccountNotFunded { account },
+            N::InsufficientNative => Self::InsufficientNative,
+            N::NativeTransferUnconfirmed { transaction } => Self::NativeTransferUnconfirmed { transaction },
             N::Rejected(_) => Self::Chain { retryable: false },
             N::Rpc(_) | N::Network(_) => Self::Chain { retryable: true },
         }

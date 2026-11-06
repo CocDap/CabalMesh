@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button, Field, Input, Panel } from "../ds";
 import { startBalanceSync } from "../state/balanceSync";
 import { errorCopy } from "../state/errorCopy";
-import { transferAmountError } from "../state/vaultTransfer";
+import { hasTokenBalance, transferAmountError, transferTokens } from "../state/vaultTransfer";
 import type { NearAccountView, NearTokenView } from "../types/bindings";
 import "./vault.css";
 import { WalletSetup } from "./WalletSetup";
@@ -134,20 +134,21 @@ export function VaultAssets() {
                 <thead><tr><th scope="col">TOKEN</th><th scope="col">WALLET</th><th scope="col">IN INTENTS</th></tr></thead>
                 <tbody>
                   <tr>
-                    <th scope="row"><span className="vault-token-symbol">NEAR</span><span className="vault-token-note">NETWORK GAS</span></th>
+                    <th scope="row"><span className="vault-token-symbol">NEAR</span><span className="vault-token-note">NATIVE · GAS</span></th>
                     <td><TokenAmount value={account?.nativeBalance} loading={loading} /></td>
-                    <td><span className="vault-not-applicable" aria-label="Not tradable in Intents">N/A</span></td>
+                    <td><TokenAmount value={account?.nativeInIntents} loading={loading} /></td>
                   </tr>
                   {account?.tokens.map((token) => (
                     <tr key={token.symbol}>
-                      <th scope="row"><span className="vault-token-symbol">{token.symbol}</span><span className="vault-token-note">{tokenName(token.symbol)}</span></th>
+                      <th scope="row"><span className="vault-token-symbol">{token.symbol}</span><span className="vault-token-note">{tokenName(token.symbol, account.nativeSharesWnear)}</span></th>
                       <td><TokenAmount value={token.wallet} /></td>
                       <td><TokenAmount value={token.inIntents} /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {account && <p className="vault-note vault-balance-note">Balances are from the last successful sync. — means not yet read.</p>}
+              {account?.nativeSharesWnear && <p className="vault-note">NEAR and wNEAR share the same In Intents balance.</p>}
+              {account && !account.nativeSharesWnear && hasTokenBalance(account.nativeWrapped) && <p className="vault-note">{account.nativeWrapped} NEAR-backed wNEAR is in your wallet. Choose Withdraw → NEAR → Wrapped NEAR in Wallet to unwrap it.</p>}
               {account?.nativeBalance === "0" && <p className="vault-warning">Add NEAR to your wallet to pay network fees.</p>}
               {error && <p className="vault-warning" role="alert">{error} {account && "Last known balances are shown."}</p>}
             </div>
@@ -162,8 +163,8 @@ function isStarting(error: unknown): boolean {
   return typeof error === "object" && error !== null && "kind" in error && error.kind === "not_ready";
 }
 
-function tokenName(symbol: string) {
-  return symbol === "wNEAR" ? "WRAPPED NEAR" : symbol === "USDC" ? "USD COIN" : "TOKEN";
+function tokenName(symbol: string, sharesWnear = true) {
+  return symbol === "NEAR" ? "NATIVE NEAR" : symbol === "wNEAR" ? (sharesWnear ? "WRAPPED NEAR" : "TEST TOKEN") : symbol === "USDC" ? "USD COIN" : "TOKEN";
 }
 
 function TokenAmount({ value, loading = false }: { value?: string | null; loading?: boolean }) {
@@ -183,37 +184,64 @@ function TransferPanel({ mode, account, onBack, onAccount }: {
   onBack: () => void;
   onAccount: (account: NearAccountView) => void;
 }) {
-  const [symbol, setSymbol] = useState(account.tokens[0]?.symbol ?? "");
+  const choices = transferTokens(account);
+  const [symbol, setSymbol] = useState(choices[0]?.symbol ?? "");
+  const [nativeSource, setNativeSource] = useState("intents");
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [syncError, setSyncError] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [needsRefresh, setNeedsRefresh] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const selected: NearTokenView | undefined = account.tokens.find((token) => token.symbol === symbol);
-  const available = mode === "deposit" ? selected?.wallet : selected?.inIntents;
-  const validation = selected && amount ? transferAmountError(amount, selected.decimals, available) : null;
-  const source = mode === "deposit" ? "Wallet" : "In Intents";
-  const destination = mode === "deposit" ? "In Intents" : "Wallet";
+  const native = symbol === "NEAR";
+  const unwrapping = native && mode === "withdraw" && nativeSource === "wallet";
+  const selected: NearTokenView | undefined = choices.find((token) => token.symbol === symbol);
+  const available = unwrapping ? account.nativeWrapped : mode === "deposit" ? selected?.wallet : selected?.inIntents;
+  const validation = selected && amount ? native && available == null ? "Refresh balances before transferring NEAR." : transferAmountError(amount, selected.decimals, available) : null;
+  const source = unwrapping ? "Wallet (wrapped NEAR)" : mode === "deposit" ? "Wallet" : "In Intents";
+  const destination = mode === "deposit" ? "In Intents" : native ? "Wallet (NEAR)" : "Wallet";
   const title = mode === "deposit" ? "Deposit" : "Withdraw";
   const noGas = account.nativeBalance === "0";
 
   useEffect(() => { headingRef.current?.focus(); }, []);
+  useEffect(() => {
+    if (!hasTokenBalance(account.nativeWrapped)) setNativeSource("intents");
+  }, [account.nativeWrapped]);
+
+  async function refreshBalances() {
+    if (busy || refreshing) return;
+    setRefreshing(true);
+    setSyncError(false);
+    try {
+      await invoke("vault_refresh_balance");
+      onAccount(await invoke<NearAccountView>("near_account"));
+      setNeedsRefresh(false);
+      setError(null);
+    } catch { setSyncError(true); }
+    finally { setRefreshing(false); }
+  }
 
   async function submit() {
-    if (busy || !selected || !amount || validation || noGas) return;
+    if (busy || refreshing || needsRefresh || !selected || !amount || validation || noGas) return;
     setBusy(true);
     setError(null);
     setSuccess(null);
     setSyncError(false);
     try {
-      const hash = await invoke<string>(mode === "deposit" ? "near_deposit" : "near_withdraw", { token: symbol, amount });
+      const hash = await invoke<string>(unwrapping ? "near_unwrap" : mode === "deposit" ? "near_deposit" : "near_withdraw", unwrapping ? { amount } : { token: symbol, amount });
       setSuccess(hash);
       setAmount("");
       try { onAccount(await invoke<NearAccountView>("near_account")); }
       catch { setSyncError(true); }
     } catch (failure) {
       setError(errorCopy(failure));
+      if (native) {
+        setNeedsRefresh(true);
+        try { onAccount(await invoke<NearAccountView>("near_account")); }
+        catch { setSyncError(true); }
+      }
     } finally {
       setBusy(false);
     }
@@ -221,7 +249,7 @@ function TransferPanel({ mode, account, onBack, onAccount }: {
 
   return (
     <section className="vault-transfer" aria-labelledby="vault-transfer-title">
-      <Button tone="ghost" size="sm" disabled={busy} onClick={onBack} className="vault-back">BACK TO ASSETS</Button>
+      <Button tone="ghost" size="sm" disabled={busy || refreshing} onClick={onBack} className="vault-back">BACK TO ASSETS</Button>
       <Panel pad={false}>
         <div className="vault-transfer-content">
           <div className="vault-transfer-heading">
@@ -236,24 +264,36 @@ function TransferPanel({ mode, account, onBack, onAccount }: {
           </div>
           <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="vault-transfer-form" aria-busy={busy}>
             <Field label="TOKEN" htmlFor="vault-transfer-token">
-              <select id="vault-transfer-token" className="vault-token-select" value={symbol} disabled={busy} onChange={(event) => {
+              <select id="vault-transfer-token" className="vault-token-select" value={symbol} disabled={busy || refreshing} onChange={(event) => {
                 setSymbol(event.target.value);
+                setNativeSource("intents");
                 setAmount("");
                 setError(null);
                 setSuccess(null);
                 setSyncError(false);
               }}>
-                {account.tokens.map((token) => <option key={token.symbol} value={token.symbol}>{token.symbol} · {tokenName(token.symbol)}</option>)}
+                {choices.map((token) => <option key={token.symbol} value={token.symbol}>{token.symbol} · {tokenName(token.symbol, account.nativeSharesWnear)}</option>)}
               </select>
             </Field>
-            <div className="vault-available" aria-live="polite"><span>{source} balance</span><span>{available ?? "Not yet read"}{available != null ? ` ${symbol}` : ""}</span></div>
+            {native && mode === "withdraw" && hasTokenBalance(account.nativeWrapped) && <Field label="BALANCE" htmlFor="vault-native-source">
+              <select id="vault-native-source" className="vault-token-select" value={nativeSource} disabled={busy || refreshing} onChange={(event) => { setNativeSource(event.target.value); setAmount(""); setSuccess(null); }}>
+                <option value="intents">In Intents</option>
+                <option value="wallet">Wrapped NEAR in Wallet</option>
+              </select>
+            </Field>}
+            {native && <p className="vault-note">{mode === "deposit" ? "NEAR is wrapped and deposited automatically. The available amount keeps NEAR for storage and network fees." : unwrapping ? "Unwrap NEAR already held in your wallet. This does not withdraw from Intents again." : "Withdraw your NEAR-backed balance from Intents and receive native NEAR in this wallet."}</p>}
+            {native && !account.nativeSharesWnear && <p className="vault-note">Test wNEAR is a separate token. It cannot be converted to native NEAR.</p>}
+            <div className="vault-available" aria-live="polite"><span>{native && mode === "deposit" ? "Available to deposit" : `${source} balance`}</span><span>{available ?? "Not yet read"}{available != null ? ` ${symbol}` : ""}</span></div>
+            <Button type="button" tone="ghost" size="sm" disabled={busy || refreshing} onClick={() => void refreshBalances()}>{refreshing ? "REFRESHING…" : "REFRESH BALANCES"}</Button>
+            {syncError && <p className="vault-warning" role="alert">Balances could not be refreshed. Try refreshing again before sending.</p>}
+            {needsRefresh && <p className="vault-note" role="status">Refresh balances before sending again.</p>}
             <Field label={`AMOUNT (${symbol})`} htmlFor="vault-transfer-amount">
               <Input id="vault-transfer-amount" type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={amount} disabled={busy} invalid={!!validation} aria-describedby={validation || error ? "vault-transfer-error" : undefined} onChange={(event) => { setAmount((event.target as HTMLInputElement).value); setError(null); }} />
             </Field>
             {(validation || error) && <p id="vault-transfer-error" className="vault-warning" role="alert">{validation || error}</p>}
             <p className={noGas ? "vault-warning" : "vault-note"}>{noGas ? "Add NEAR to your wallet before continuing." : "Network fees are paid in NEAR from your wallet."}</p>
-            <Button type="submit" tone="primary" block disabled={busy || !amount || !selected || !!validation || noGas}>
-              {busy ? "SENDING…" : `${title.toUpperCase()} ${symbol}`}
+            <Button type="submit" tone="primary" block disabled={busy || refreshing || needsRefresh || !amount || !selected || !!validation || noGas || (native && available == null)}>
+              {busy ? "SENDING…" : unwrapping ? "UNWRAP TO NEAR" : `${title.toUpperCase()} ${symbol}`}
             </Button>
           </form>
           {success && <div className="vault-transfer-success" role="status"><p>{title} submitted.</p><PublicValue value={success} label="transaction hash" />{syncError && <p className="vault-note">Balance refresh is unavailable. Refresh Assets to check the latest balance.</p>}</div>}

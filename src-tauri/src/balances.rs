@@ -38,6 +38,13 @@ pub struct Balances {
     pub network: Option<Network>,
     /// Native NEAR in yocto, which pays for gas.
     pub native: Option<String>,
+    /// NEAR-backed wrapper balances, never the unrelated Tidepool faucet token.
+    #[serde(default)]
+    pub native_token: Option<TokenBalance>,
+    #[serde(default)]
+    pub native_available: Option<String>,
+    #[serde(default)]
+    pub native_wrapper: Option<String>,
     /// By asset symbol.
     pub tokens: BTreeMap<String, TokenBalance>,
 }
@@ -60,10 +67,23 @@ impl Balances {
                 },
             );
         }
+        let wrapper = network.near().wrapped_native;
+        let native_token = if let Some(asset) = assets.iter().find(|asset| asset.contract == wrapper) {
+            tokens.get(asset.symbol).cloned()
+                .ok_or_else(|| NearError::Rpc("wrapper balance was not read".into()))?
+        } else {
+            TokenBalance {
+                wallet: bridge.wallet_balance(wrapper).await?.to_string(),
+                in_intents: bridge.verifier_balance(wrapper).await?.to_string(),
+            }
+        };
         Ok(Self {
             account: bridge.account_id().to_string(),
             network: Some(network),
             native: Some(bridge.native_balance().await?.to_string()),
+            native_token: Some(native_token),
+            native_available: Some(bridge.native_deposit_available(wrapper).await?.to_string()),
+            native_wrapper: Some(wrapper.into()),
             tokens,
         })
     }
@@ -74,6 +94,11 @@ impl Balances {
     pub fn load_for(store: &cabal_store::JsonStore, account: &str, network: Network) -> Self {
         let cached: Self = store.load_or(Self::default());
         if cached.account == account && cached.network == Some(network) {
+            let mut cached = cached;
+            if cached.native_wrapper.as_deref() != Some(network.near().wrapped_native) {
+                cached.native_token = None;
+                cached.native_available = None;
+            }
             cached
         } else {
             Self::default()

@@ -30,7 +30,6 @@
 .vault-token-note { display: block; margin-top: var(--space-3); font-size: var(--text-2xs); line-height: 1.5; color: var(--vault-label-color); }
 .vault-token-amount { color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.6; }
 .vault-not-applicable { color: var(--text-muted); line-height: 1.6; }
-.vault-balance-note { padding-top: var(--space-5); border-top: var(--border-hairline-style); font-size: var(--text-2xs); }
 .vault-warning { margin: var(--space-4) 0 0; color: var(--accent-blood-red); font-size: var(--text-xs); line-height: 1.6; overflow-wrap: anywhere; }
 .vault-transfer { display: flex; flex-direction: column; gap: var(--space-5); }
 .vault-back { align-self: flex-start; min-height: 48px; padding-left: 0 !important; color: var(--text-secondary) !important; }

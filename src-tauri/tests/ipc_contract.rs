@@ -59,6 +59,11 @@ fn near_account_view_shape() {
         account_id: "b6336d522196d849252c5dbef77215710abf748ac53afc63ece79378d188b1ff".into(),
         network: "NEAR Testnet".into(),
         native_balance: Some("1.5".into()),
+        native_available: Some("1.48".into()),
+        native_in_intents: Some("0.5".into()),
+        native_wrapped: Some("0.1".into()),
+        native_shares_wnear: false,
+        native_transfers_supported: true,
         tokens: vec![
             NearTokenView {
                 symbol: "wNEAR".into(),
@@ -282,6 +287,7 @@ fn command_inventory() {
         "wallet_create_testnet_account",
         "near_deposit",
         "near_withdraw",
+        "near_unwrap",
         "llm_get_settings",
         "llm_save_settings",
         "llm_set_api_key",
@@ -309,6 +315,6 @@ fn command_inventory() {
         "vault_keys",
     ];
     commands.sort_unstable();
-    assert_eq!(commands.len(), 47, "command count changed");
+    assert_eq!(commands.len(), 48, "command count changed");
     insta::assert_snapshot!(commands.join("\n"));
 }

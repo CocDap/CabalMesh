@@ -24,6 +24,7 @@ llm_test_connection
 mesh_snapshot
 near_account
 near_deposit
+near_unwrap
 near_withdraw
 network_set
 parse_intent_chat

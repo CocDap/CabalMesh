@@ -51,6 +51,8 @@ impl AssetSpec {
 pub struct NearConfig {
     pub rpc_url: &'static str,
     pub verifier: &'static str,
+    /// The NEAR-backed wrapper, which is distinct from Tidepool's faucet token.
+    pub wrapped_native: &'static str,
     pub base: AssetSpec,
     /// Every trade is `asset ⇄ quote` at the agreed USD price.
     pub quote: AssetSpec,
@@ -69,6 +71,7 @@ pub struct NearConfig {
 const TESTNET: NearConfig = NearConfig {
     rpc_url: "https://rpc.testnet.fastnear.com",
     verifier: "verifier.tidepool-sandbox.testnet",
+    wrapped_native: "wrap.testnet",
     base: AssetSpec {
         symbol: "wNEAR",
         code: "NEA",
@@ -94,6 +97,7 @@ const TESTNET: NearConfig = NearConfig {
 const MAINNET: NearConfig = NearConfig {
     rpc_url: "https://rpc.mainnet.fastnear.com",
     verifier: "intents.near",
+    wrapped_native: "wrap.near",
     base: AssetSpec {
         symbol: "wNEAR",
         code: "NEA",
@@ -294,6 +298,8 @@ mod tests {
         assert_eq!(near.rpc_url, "https://rpc.testnet.fastnear.com");
         assert_eq!(near.verifier, "verifier.tidepool-sandbox.testnet");
         assert_eq!(near.base.contract, "wnear.tidepool-sandbox.testnet");
+        assert_eq!(near.wrapped_native, "wrap.testnet");
+        assert_ne!(near.wrapped_native, near.base.contract);
         assert_eq!(near.base.decimals, 24);
         assert_eq!(near.quote.contract, "usdc.tidepool-sandbox.testnet");
         assert_eq!(near.quote.decimals, 6);
@@ -306,6 +312,7 @@ mod tests {
         assert_eq!(near.rpc_url, "https://rpc.mainnet.fastnear.com");
         assert_eq!(near.verifier, "intents.near");
         assert_eq!(near.base.contract, "wrap.near");
+        assert_eq!(near.wrapped_native, near.base.contract);
         assert_eq!(near.price_feed, "https://1click.chaindefuser.com/v0/tokens");
     }
 

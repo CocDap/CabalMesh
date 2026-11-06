@@ -1,3 +1,18 @@
+import type { NearAccountView, NearTokenView } from "../types/bindings";
+
+/** Native NEAR uses its backed wrapper balance, never Tidepool's test wNEAR. */
+export function transferTokens(account: NearAccountView): NearTokenView[] {
+  return account.nativeTransfersSupported ? [{
+    symbol: "NEAR", decimals: 24, wallet: account.nativeAvailable,
+    inIntents: account.nativeInIntents,
+  }, ...account.tokens] : account.tokens;
+}
+
+export function hasTokenBalance(value?: string | null): boolean {
+  const raw = value == null ? null : rawAmount(value, 24);
+  return raw != null && raw > 0n;
+}
+
 /** Compare token amounts in raw units; floating point loses token precision. */
 function rawAmount(value: string, decimals: number): bigint | null {
   if (!/^\d+(?:\.\d+)?$/.test(value)) return null;

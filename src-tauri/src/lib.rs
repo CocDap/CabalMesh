@@ -493,6 +493,7 @@ pub fn run() {
             wallet_setup::wallet_create_testnet_account,
             commands::near_deposit,
             commands::near_withdraw,
+            commands::near_unwrap,
             commands::vault_identities,
             commands::vault_keys,
             commands::security_status,

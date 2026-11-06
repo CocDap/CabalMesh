@@ -2353,6 +2353,11 @@ pub struct NearAccountView {
     /// Absent if it has never been read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_balance: Option<String>,
+    pub native_available: Option<String>,
+    pub native_in_intents: Option<String>,
+    pub native_wrapped: Option<String>,
+    pub native_shares_wnear: bool,
+    pub native_transfers_supported: bool,
     pub tokens: Vec<NearTokenView>,
     /// Empty where funds are real.
     pub faucet_links: Vec<String>,
@@ -2377,6 +2382,11 @@ pub async fn near_account(state: State<'_, AppState>) -> Result<NearAccountView,
         account_id: account.to_string(),
         network: config.network.label().to_string(),
         native_balance: balances.native.as_deref().and_then(|raw| plain_amount(raw, NATIVE_DECIMALS)),
+        native_available: balances.native_available.as_deref().and_then(|raw| plain_amount(raw, NATIVE_DECIMALS)),
+        native_in_intents: balances.native_token.as_ref().and_then(|token| plain_amount(&token.in_intents, NATIVE_DECIMALS)),
+        native_wrapped: balances.native_token.as_ref().and_then(|token| plain_amount(&token.wallet, NATIVE_DECIMALS)),
+        native_shares_wnear: near.wrapped_native == near.base.contract,
+        native_transfers_supported: config.verifier() == near.verifier,
         tokens: [near.base, near.quote]
             .iter()
             .map(|spec| {
@@ -2397,10 +2407,13 @@ pub async fn near_account(state: State<'_, AppState>) -> Result<NearAccountView,
 fn near_amount(token: &str, amount: &str) -> Result<(crate::network_config::AssetSpec, u128), AppError> {
     use crate::error::InvalidReason;
 
-    let spec = crate::network_config::assets(device_chain())
+    let spec = if token == "NEAR" {
+        crate::network_config::AssetSpec { symbol: "NEAR", code: "NEA", decimals: NATIVE_DECIMALS,
+            contract: crate::network_config::NetworkConfig::current().near().wrapped_native }
+    } else { crate::network_config::assets(device_chain())
         .into_iter()
         .find(|spec| spec.symbol == token)
-        .ok_or(AppError::InvalidIntent { field: "token", reason: InvalidReason::Malformed })?;
+        .ok_or(AppError::InvalidIntent { field: "token", reason: InvalidReason::Malformed })? };
     let parsed = cabal_core::TokenAmount::parse(amount, spec.decimals)?;
     if parsed.is_zero() {
         return Err(AppError::InvalidIntent { field: "amount", reason: InvalidReason::OutOfRange });
@@ -2422,10 +2435,14 @@ pub async fn near_deposit(token: String, amount: String, state: State<'_, AppSta
     let (spec, raw) = near_amount(&token, &amount)?;
     let services = state.services()?;
     let bridge = services.near().await?;
-    let tx = bridge.deposit(spec.contract, raw).await?;
+    let result = if token == "NEAR" {
+        ensure_native_verifier()?;
+        bridge.deposit_native(spec.contract, raw).await
+    } else { bridge.deposit(spec.contract, raw).await };
     // The money has moved whatever this read does, so its failure is not the
     // command's: the next refresh will catch up.
     let _ = read_and_cache(&bridge, crate::network_config::NetworkConfig::current().network).await;
+    let tx = result?;
     Ok(tx.0)
 }
 
@@ -2441,9 +2458,32 @@ pub async fn near_withdraw(token: String, amount: String, state: State<'_, AppSt
     let (spec, raw) = near_amount(&token, &amount)?;
     let services = state.services()?;
     let bridge = services.near().await?;
-    let tx = bridge.withdraw(spec.contract, raw, crate::intents::now_ms()).await?;
+    let result = if token == "NEAR" {
+        ensure_native_verifier()?;
+        bridge.withdraw_native(spec.contract, raw, crate::intents::now_ms()).await
+    } else { bridge.withdraw(spec.contract, raw, crate::intents::now_ms()).await };
     let _ = read_and_cache(&bridge, crate::network_config::NetworkConfig::current().network).await;
+    let tx = result?;
     Ok(tx.0)
+}
+
+/// Unwrap NEAR-backed tokens already held in this wallet, without debiting Intents.
+#[tauri::command]
+pub async fn near_unwrap(amount: String, state: State<'_, AppState>) -> Result<String, AppError> {
+    ensure_native_verifier()?;
+    let (spec, raw) = near_amount("NEAR", &amount)?;
+    let bridge = state.services()?.near().await?;
+    let result = bridge.unwrap_native(spec.contract, raw).await;
+    let _ = read_and_cache(&bridge, crate::network_config::NetworkConfig::current().network).await;
+    Ok(result?.0)
+}
+
+fn ensure_native_verifier() -> Result<(), AppError> {
+    let config = crate::network_config::NetworkConfig::current();
+    if config.verifier() != config.near().verifier {
+        return Err(AppError::Unsupported { feature: "native NEAR on a custom verifier" });
+    }
+    Ok(())
 }
 
 /// This device's chain address — what someone sends assets to.

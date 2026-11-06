@@ -30,6 +30,10 @@ export function errorCopy(failure: unknown): string {
         : "The chain rejected it. Nothing settled.";
     case "near_account_not_funded":
       return `FUND THIS ACCOUNT WITH NEAR FIRST: ${error.detail.account}`;
+    case "insufficient_native":
+      return "NEAR must cover the amount, account storage and network fees. Reduce the amount or add NEAR.";
+    case "native_transfer_unconfirmed":
+      return "Transfer not confirmed. Refresh balances before retrying. Wrapped NEAR in your wallet can be withdrawn as NEAR.";
     case "vault_locked":
       return "The vault is locked. No key is available.";
     case "too_many_subscriptions":

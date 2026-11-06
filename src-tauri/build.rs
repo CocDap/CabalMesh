@@ -40,6 +40,7 @@ const COMMANDS: &[&str] = &[
     "wallet_create_testnet_account",
     "near_deposit",
     "near_withdraw",
+    "near_unwrap",
     "network_set",
     "parse_intent_chat",
     "preview_intent",

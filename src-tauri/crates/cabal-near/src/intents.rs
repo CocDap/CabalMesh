@@ -86,6 +86,10 @@ enum Intent<'a> {
         receiver_id: &'a str,
         amount: String,
     },
+    NativeWithdraw {
+        receiver_id: &'a str,
+        amount: String,
+    },
     Transfer {
         receiver_id: &'a str,
         tokens: BTreeMap<&'a str, String>,
@@ -180,6 +184,22 @@ pub fn ft_withdraw_payload(
         amount: amount.to_string(),
     };
     signed(signer, verifier, vec![intent], deadline_unix_ms, nonce)
+}
+
+/// Withdraw the verifier's NEAR-backed balance to the signer as native NEAR.
+#[must_use]
+pub fn native_withdraw_payload(
+    signer: &NearKeypair,
+    verifier: &AccountId,
+    amount: u128,
+    deadline_unix_ms: u64,
+    nonce: [u8; 32],
+) -> MultiPayload {
+    let account = signer.account_id();
+    signed(signer, verifier, vec![Intent::NativeWithdraw {
+        receiver_id: account.as_str(),
+        amount: amount.to_string(),
+    }], deadline_unix_ms, nonce)
 }
 
 #[cfg(test)]
