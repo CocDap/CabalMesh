@@ -60,6 +60,9 @@ pub struct NearConfig {
     /// The contract that pays gateways. `None` submits straight to the verifier
     /// and charges no fee. Set it only once the contract is deployed, since a
     /// fee signed to an account with no contract behind it pays nobody.
+    ///
+    /// Fixed at build time, by `build.rs`, so a mobile build gets it too and
+    /// every node built from one config signs the same fee.
     pub rewards: Option<&'static str>,
     /// What each side pays the rewards contract, in the quote token's smallest unit.
     pub fee_per_side: u128,
@@ -85,7 +88,7 @@ const TESTNET: NearConfig = NearConfig {
         contract: "usdc.tidepool-sandbox.testnet",
     },
     price_feed: "https://www.usetidepool.tech/v0/tokens",
-    rewards: None,
+    rewards: option_env!("CABALMESH_REWARDS_TESTNET"),
     fee_per_side: 10_000,
     explorer: "https://testnet.nearblocks.io",
     faucets: &[
@@ -112,7 +115,8 @@ const MAINNET: NearConfig = NearConfig {
         contract: "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
     },
     price_feed: "https://1click.chaindefuser.com/v0/tokens",
-    rewards: None,
+    rewards: option_env!("CABALMESH_REWARDS_MAINNET"),
+    // Zero keeps mainnet from charging anything, whatever account is set above.
     fee_per_side: 0,
     explorer: "https://nearblocks.io",
     faucets: &[],
@@ -122,6 +126,10 @@ impl NearConfig {
     /// The fee a trader signs, or `None` if this network pays no gateways.
     #[must_use]
     pub fn gateway_fee(&self) -> Option<cabal_near::GatewayFee> {
+        // The contract refuses a zero fee, so signing one would fail every trade.
+        if self.fee_per_side == 0 {
+            return None;
+        }
         Some(cabal_near::GatewayFee {
             to: cabal_near::AccountId::try_from(self.rewards?).ok()?,
             token: self.quote.token_id(),
@@ -319,6 +327,29 @@ mod tests {
     #[test]
     fn mainnet_charges_no_fee_until_its_contract_is_audited() {
         assert_eq!(Network::Mainnet.near().gateway_fee(), None);
+    }
+
+    #[test]
+    fn a_zero_fee_is_never_signed_even_with_a_contract_set() {
+        let near = NearConfig {
+            rewards: Some("rewards.test"),
+            fee_per_side: 0,
+            ..Network::Testnet.near()
+        };
+        assert_eq!(near.gateway_fee(), None);
+    }
+
+    /// A malformed account would otherwise turn the fee off with no error.
+    #[test]
+    fn the_rewards_accounts_this_build_was_given_are_valid() {
+        for network in [Network::Testnet, Network::Mainnet] {
+            if let Some(account) = network.near().rewards {
+                assert!(
+                    cabal_near::AccountId::try_from(account).is_ok(),
+                    "{account} is not a NEAR account id"
+                );
+            }
+        }
     }
 
     #[test]

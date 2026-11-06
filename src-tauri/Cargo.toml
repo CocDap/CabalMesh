@@ -39,6 +39,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Reads the rewards accounts for `network_config.rs`. See build.rs.
+dotenv = "0.15.0"
 
 [features]
 ts-rs = ["dep:ts-rs", "cabal-core/ts-rs"]

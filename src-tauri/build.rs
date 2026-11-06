@@ -64,7 +64,36 @@ const COMMANDS: &[&str] = &[
     "vault_keys",
 ];
 
+/// Read at build time, unlike the rest of the file, which the desktop app loads
+/// when it starts. A mobile bundle has no such file, and a node that skipped the
+/// fee would strand the fee its counterparty signed.
+const REWARDS_ACCOUNTS: [&str; 2] = ["CABALMESH_REWARDS_TESTNET", "CABALMESH_REWARDS_MAINNET"];
+const LOCAL_CONFIG: &str = ".env";
+
+/// Hands the rewards accounts to `option_env!` in `src/network_config.rs`. A
+/// variable already set in the shell wins, and an empty one counts as unset.
+fn embed_rewards_accounts() {
+    for name in REWARDS_ACCOUNTS {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    // Only if it exists: Cargo treats a missing path as changed on every build,
+    // which would recompile the whole app each time.
+    if std::path::Path::new(LOCAL_CONFIG).exists() {
+        println!("cargo:rerun-if-changed={LOCAL_CONFIG}");
+    }
+    let Ok(entries) = dotenv::from_path_iter(LOCAL_CONFIG) else {
+        return;
+    };
+    for (name, value) in entries.flatten() {
+        let shell_wins = std::env::var_os(&name).is_some();
+        if REWARDS_ACCOUNTS.contains(&name.as_str()) && !value.is_empty() && !shell_wins {
+            println!("cargo:rustc-env={name}={value}");
+        }
+    }
+}
+
 fn main() {
+    embed_rewards_accounts();
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
