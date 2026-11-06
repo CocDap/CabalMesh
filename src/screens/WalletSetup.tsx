@@ -73,7 +73,6 @@ export function WalletSetup({ onComplete, onCancel }: { onComplete: () => void; 
   return (
     <section className="wallet-setup" aria-labelledby="wallet-setup-title">
       <div className="wallet-setup-body">
-        <div className="wallet-setup-network">NEAR TESTNET<span>TEST FUNDS</span></div>
         <h1 id="wallet-setup-title" ref={titleRef} tabIndex={-1}>{created ? "Your wallet is ready." : "Name your wallet."}</h1>
         {created ? (
           <>
@@ -111,7 +110,6 @@ export function WalletSetup({ onComplete, onCancel }: { onComplete: () => void; 
               </Button>
             </form>
             {!status && error && <Button onClick={() => setReload((value) => value + 1)}>RETRY</Button>}
-            <p className="wallet-setup-hint">Creating a named testnet account needs internet. The testnet faucet sponsors account creation; setup also registers your key for Intents.</p>
             <Button tone="ghost" disabled={busy} onClick={onCancel}>BACK</Button>
           </>
         )}

@@ -1,7 +1,7 @@
 import { Button, Logo } from "../ds";
 
 /**
- * First screen. Two offers, no chrome.
+ * First screen. One entry action, no chrome.
  *
  * Copy is the board's, verbatim: impersonal, present tense, fragments ending in
  * full stops. "ZERO IDENTITY. PRIVATE INTENTS." is three statements, not a
@@ -59,16 +59,11 @@ export function Splash({ onEnter, entering = false, error }: { onEnter: () => vo
           gap: "var(--space-6)",
           width: "100%",
           maxWidth: 320,
-          // 16px apart: expanded hit areas that meet would steal each other's
-          // taps (ds/mobile.css, C4).
           marginTop: "var(--space-8)",
         }}
       >
         <Button tone="primary" size="lg" block className="cm-touch" disabled={entering} onClick={onEnter}>
           {entering ? "LOADING WALLET…" : "ENTER THE MESH"}
-        </Button>
-        <Button tone="ghost" size="lg" block className="cm-touch" disabled={entering} onClick={onEnter}>
-          SET UP WALLET
         </Button>
         {error && <p role="alert" style={{ color: "var(--accent-blood-red)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>{error}</p>}
       </div>
