@@ -126,6 +126,25 @@ pub enum FailureReason {
     InsufficientBalance,
 }
 
+/// What a settlement proof hash names.
+///
+/// Both are base58 hashes of the same length, so the hash alone cannot say
+/// which it is, and the proof screen must not call an intent hash a
+/// transaction hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ProofKind {
+    /// The transaction that executed the intent, from this device's own
+    /// submission or a gateway's report checked against the chain. The
+    /// default, so proofs stored before this field existed keep their label.
+    #[default]
+    Transaction,
+    /// This intent's own hash, found spent on chain. The settlement is proven
+    /// but the transaction that spent it is not known to this device.
+    Intent,
+}
+
 /// Where an intent is in its life.
 ///
 /// Matched exhaustively everywhere — no catch-all arm — so adding a variant
@@ -148,6 +167,9 @@ pub enum IntentStatus {
     /// Settled on-chain. Terminal.
     Settled {
         proof: ProofHash,
+        /// What `proof` names.
+        #[serde(default)]
+        proof_kind: ProofKind,
         filled_at: UsdPrice,
         elapsed_ms: u32,
     },
@@ -339,9 +361,32 @@ mod tests {
     fn settled() -> IntentStatus {
         IntentStatus::Settled {
             proof: ProofHash::new("G1s5UDrB6f2phA7RdNvY"),
+            proof_kind: ProofKind::Transaction,
             filled_at: UsdPrice::from_cents(9421),
             elapsed_ms: 11_400,
         }
+    }
+
+    #[test]
+    fn a_settlement_stored_before_proof_kind_reads_as_a_transaction() {
+        let stored = r#"{"status":"SETTLED","proof":"G1s5","filled_at":9421,"elapsed_ms":11400}"#;
+        let IntentStatus::Settled { proof_kind, .. } = serde_json::from_str(stored).unwrap() else {
+            panic!("not settled");
+        };
+        assert_eq!(proof_kind, ProofKind::Transaction);
+    }
+
+    #[test]
+    fn an_intent_hash_proof_round_trips() {
+        let status = IntentStatus::Settled {
+            proof: ProofHash::new("CRDH"),
+            proof_kind: ProofKind::Intent,
+            filled_at: UsdPrice::from_cents(370),
+            elapsed_ms: 1,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains(r#""proof_kind":"INTENT""#), "{json}");
+        assert_eq!(serde_json::from_str::<IntentStatus>(&json).unwrap(), status);
     }
 
     #[test]

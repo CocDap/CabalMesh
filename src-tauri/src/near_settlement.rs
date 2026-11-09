@@ -18,7 +18,7 @@ use crate::intents::{line, now_ms, Intent, Ledger};
 use crate::near_bridge::{NearBridge, NearError, TxHash, INTENT_LIFETIME_MS};
 use crate::network_config::NearConfig;
 use crate::state::AppState;
-use cabal_core::{Action, Chain, FailureReason, IntentId, IntentStatus, ProofHash, UsdPrice};
+use cabal_core::{Action, Chain, FailureReason, IntentId, IntentStatus, ProofHash, ProofKind, UsdPrice};
 use cabal_near::{
     buyer_diff, quote_amount, seller_diff, token_diff_payload, verify, versioned_nonce, AccountId, FeeRule, MultiPayload,
     NearKeypair,
@@ -467,8 +467,10 @@ fn can_reconcile(intent: &Intent) -> bool {
     intent.status.is_active() || matches!(intent.status, IntentStatus::Failed { reason: FailureReason::SettlementRejected })
 }
 
-/// Finishes this device's intent for a deal, if it has one.
-fn mark_settled(ledger: &Ledger, deal: &str, tx: &str) {
+/// Finishes this device's intent for a deal, if it has one. `kind` says what
+/// `tx` is: a transaction hash, or this intent's own hash when only its spent
+/// nonce was seen.
+fn mark_settled(ledger: &Ledger, deal: &str, tx: &str, kind: ProofKind) {
     let Some(intent) = intent_of_deal(ledger, deal) else {
         return;
     };
@@ -476,7 +478,7 @@ fn mark_settled(ledger: &Ledger, deal: &str, tx: &str) {
         return;
     };
     let elapsed_ms = u32::try_from(now_ms().saturating_sub(intent.created_ms)).unwrap_or(u32::MAX);
-    if ledger.confirm_settled(&intent.id, ProofHash::new(tx), terms.price, elapsed_ms, now_ms()).is_ok() {
+    if ledger.confirm_settled(&intent.id, ProofHash::new(tx), kind, terms.price, elapsed_ms, now_ms()).is_ok() {
         ledger.record(&intent.id, line(format!("PROOF {tx}"), LogTone::Loud));
     }
 }
@@ -506,7 +508,7 @@ pub async fn submit_held(ledger: &Ledger, book: &DiffBook, bridge: &NearBridge) 
                 book.mark_pair_submitted(&deal, &pair);
                 // Ownership was established before the RPC. A local deal that
                 // appeared during a gateway submission is unrelated to its result.
-                if local.is_some() { mark_settled(ledger, &deal, &tx); }
+                if local.is_some() { mark_settled(ledger, &deal, &tx, ProofKind::Transaction); }
                 submitted.push(SettlementComplete {
                     deal_id: deal,
                     tx_hash: tx,
@@ -573,7 +575,7 @@ pub async fn confirm_reports(ledger: &Ledger, book: &DiffBook, bridge: &NearBrid
             match bridge.tx_logged(&reported.tx_hash, &reported.gateway, &needle).await {
                 Ok(true) => {
                     book.mark_submitted(&terms.id);
-                    mark_settled(ledger, &terms.id, &reported.tx_hash);
+                    mark_settled(ledger, &terms.id, &reported.tx_hash, ProofKind::Transaction);
                     continue;
                 }
                 Ok(false) => ledger.clear_reported_tx(&intent.id),
@@ -587,7 +589,7 @@ pub async fn confirm_reports(ledger: &Ledger, book: &DiffBook, bridge: &NearBrid
             Ok(true) => {
                 book.mark_submitted(&terms.id);
                 ledger.record(&intent.id, line("OUR SIGNED INTENT WAS USED ON CHAIN. PROOF IS ITS INTENT HASH.", LogTone::Dim));
-                mark_settled(ledger, &terms.id, &needle);
+                mark_settled(ledger, &terms.id, &needle, ProofKind::Intent);
             }
             Ok(false) => {}
             Err(error) => tracing::debug!(target: "cabalmesh::settlement", %error, "could not check our nonce"),
@@ -1037,7 +1039,10 @@ mod tests {
             WNEAR, 4_040_000, deadline, [9; 32]);
         { fx.book.file.lock().unwrap().deals.get_mut("d").unwrap().sell = Some(legacy); }
         confirm_reports(&fx.ledger, &fx.book, &gateway).await;
-        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Settled { .. }));
+        assert!(matches!(
+            fx.ledger.get(&id).unwrap().status,
+            IntentStatus::Settled { proof_kind: ProofKind::Intent, .. }
+        ), "a spent nonce proves only the intent hash");
     }
 
     #[tokio::test]
@@ -1151,8 +1156,9 @@ mod tests {
         assert_eq!(rpc.order().iter().filter(|m| *m == "send_tx").count(), 1);
 
         match fx.ledger.get(&id).unwrap().status {
-            IntentStatus::Settled { proof, filled_at, .. } => {
+            IntentStatus::Settled { proof, proof_kind, filled_at, .. } => {
                 assert_eq!(proof, ProofHash::new("TXHASH"));
+                assert_eq!(proof_kind, ProofKind::Transaction, "this device submitted, so it holds the tx hash");
                 assert_eq!(filled_at, UsdPrice::from_cents(404));
             }
             other => panic!("expected Settled, got {other:?}"),
@@ -1313,7 +1319,10 @@ mod tests {
         assert!(fx.ledger.get(&id).unwrap().deal.unwrap().reported.is_some());
 
         confirm_reports(&fx.ledger, &fx.book, &gateway).await;
-        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Settled { .. }));
+        assert!(matches!(
+            fx.ledger.get(&id).unwrap().status,
+            IntentStatus::Settled { proof_kind: ProofKind::Transaction, .. }
+        ), "a checked report names the real transaction");
     }
 
     #[test]
@@ -1432,10 +1441,11 @@ mod tests {
 
         let used = MockRpc::serve(nonce_rpc(true)).await;
         confirm_reports(&fx.ledger, &fx.book, &bridge(&used.url)).await;
-        let IntentStatus::Settled { proof, .. } = fx.ledger.get(&id).unwrap().status else {
+        let IntentStatus::Settled { proof, proof_kind, .. } = fx.ledger.get(&id).unwrap().status else {
             panic!("the signature was spent, so the deal settled");
         };
         assert_eq!(proof.to_string(), hash, "no tx hash reached this device, so the proof is its intent hash");
+        assert_eq!(proof_kind, ProofKind::Intent, "and it must not be labelled a transaction hash");
         assert!(fx.book.held().is_empty());
     }
 

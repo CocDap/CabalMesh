@@ -207,7 +207,11 @@ willBroadcast: boolean, };
  * surfaces every place that has to decide what it means, rather than silently
  * falling through to a default.
  */
-export type IntentStatus = { "status": "DRAFT" } | { "status": "BROADCAST", route_len: number, } | { "status": "NEGOTIATING", bids: number, best: UsdPrice | null, } | { "status": "FINDING_ROUTE" } | { "status": "WAITING" } | { "status": "SETTLED", proof: ProofHash, filled_at: UsdPrice, elapsed_ms: number, } | { "status": "FAILED", reason: FailureReason, } | { "status": "CANCELLED" };
+export type IntentStatus = { "status": "DRAFT" } | { "status": "BROADCAST", route_len: number, } | { "status": "NEGOTIATING", bids: number, best: UsdPrice | null, } | { "status": "FINDING_ROUTE" } | { "status": "WAITING" } | { "status": "SETTLED", proof: ProofHash, 
+/**
+ * What `proof` names.
+ */
+proof_kind: ProofKind, filled_at: UsdPrice, elapsed_ms: number, } | { "status": "FAILED", reason: FailureReason, } | { "status": "CANCELLED" };
 
 /**
  * An intent as a list row renders it.
@@ -374,13 +378,27 @@ isTestnet: boolean, };
 export type ProofHash = string;
 
 /**
+ * What a settlement proof hash names.
+ *
+ * Both are base58 hashes of the same length, so the hash alone cannot say
+ * which it is, and the proof screen must not call an intent hash a
+ * transaction hash.
+ */
+export type ProofKind = "TRANSACTION" | "INTENT";
+
+/**
  * What the proof screen renders.
  */
 export type ProofView = { id: string, 
 /**
- * The settling transaction's hash.
+ * The settlement proof hash: the settling transaction's, or this
+ * intent's own when only its spent signature was seen on chain.
  */
 hash: string, 
+/**
+ * What `hash` names, so the screen labels it truthfully.
+ */
+hashKind: ProofKind, 
 /**
  * How long settlement took, e.g. `11.4S`.
  */

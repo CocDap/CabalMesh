@@ -173,6 +173,7 @@ mod tests {
         intent(
             IntentStatus::Settled {
                 proof: ProofHash::new("0xabc"),
+                proof_kind: cabal_core::ProofKind::Transaction,
                 filled_at: UsdPrice::from_cents(9421),
                 elapsed_ms: 11_400,
             },
@@ -268,6 +269,7 @@ mod tests {
         let broken = intent(
             IntentStatus::Settled {
                 proof: ProofHash::new("0xabc"),
+                proof_kind: cabal_core::ProofKind::Transaction,
                 filled_at: UsdPrice::from_cents(1),
                 elapsed_ms: 1,
             },

@@ -10,7 +10,7 @@
 
 use cabal_core::intent::{Condition, FailureReason, IntentStatus};
 use cabal_core::money::{TokenAmount, UsdPrice};
-use cabal_core::ProofHash;
+use cabal_core::{ProofHash, ProofKind};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -29,6 +29,7 @@ fn any_status() -> impl Strategy<Value = IntentStatus> {
         Just(IntentStatus::Waiting),
         (any::<u64>(), any::<u32>()).prop_map(|(cents, elapsed_ms)| IntentStatus::Settled {
             proof: ProofHash::new("0xa4f2c9e1b70d5533"),
+            proof_kind: ProofKind::Transaction,
             filled_at: UsdPrice::from_cents(cents),
             elapsed_ms,
         }),
@@ -102,6 +103,7 @@ proptest! {
     fn settlement_requires_routing(cents in any::<u64>()) {
         let settled = IntentStatus::Settled {
             proof: ProofHash::new("0x0"),
+            proof_kind: ProofKind::Transaction,
             filled_at: UsdPrice::from_cents(cents),
             elapsed_ms: 0,
         };

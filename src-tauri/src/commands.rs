@@ -1738,8 +1738,11 @@ pub async fn cancel_intent(id: String, state: State<'_, AppState>) -> Result<(),
 #[serde(rename_all = "camelCase")]
 pub struct ProofView {
     pub id: String,
-    /// The settling transaction's hash.
+    /// The settlement proof hash: the settling transaction's, or this
+    /// intent's own when only its spent signature was seen on chain.
     pub hash: String,
+    /// What `hash` names, so the screen labels it truthfully.
+    pub hash_kind: cabal_core::ProofKind,
     /// How long settlement took, e.g. `11.4S`.
     pub timing: String,
     /// The hops the intent travelled. Empty when it settled directly.
@@ -1768,7 +1771,7 @@ pub async fn intent_proof(id: String, state: State<'_, AppState>) -> Result<Proo
             reason: InvalidReason::Missing,
         })?;
 
-    let cabal_core::IntentStatus::Settled { proof, filled_at, elapsed_ms } = &intent.status else {
+    let cabal_core::IntentStatus::Settled { proof, proof_kind, filled_at, elapsed_ms } = &intent.status else {
         return Err(AppError::InvalidIntent {
             field: "status",
             reason: InvalidReason::OutOfRange,
@@ -1778,6 +1781,7 @@ pub async fn intent_proof(id: String, state: State<'_, AppState>) -> Result<Proo
     Ok(ProofView {
         id: intent.id.to_string(),
         hash: proof.to_string(),
+        hash_kind: *proof_kind,
         timing: crate::intents::format_elapsed(u64::from(*elapsed_ms)),
         route: intent.route.iter().map(cabal_core::NodeId::truncated).collect(),
         // Zero cents means the intent carried no condition, so there is no
@@ -2027,6 +2031,7 @@ mod intent_tests {
             IntentStatus::Waiting,
             IntentStatus::Settled {
                 proof: ProofHash::new("0xabc"),
+                proof_kind: cabal_core::ProofKind::Transaction,
                 filled_at: UsdPrice::from_cents(9421),
                 elapsed_ms: 11_400,
             },
@@ -2120,6 +2125,7 @@ mod intent_tests {
                     &id,
                     IntentStatus::Settled {
                         proof: ProofHash::new("0xdeadbeef"),
+                        proof_kind: cabal_core::ProofKind::Transaction,
                         filled_at: UsdPrice::from_cents(9421),
                         elapsed_ms: 11_400,
                     },
@@ -2183,6 +2189,7 @@ mod intent_tests {
                 &intent.id,
                 IntentStatus::Settled {
                     proof: ProofHash::new("0xa4f2c9e1b70d5533"),
+                    proof_kind: cabal_core::ProofKind::Transaction,
                     filled_at: UsdPrice::from_cents(9421),
                     elapsed_ms: 11_400,
                 },
@@ -2191,7 +2198,7 @@ mod intent_tests {
             .unwrap();
 
         let settled = ledger.get(&intent.id).unwrap();
-        let IntentStatus::Settled { proof, filled_at, elapsed_ms } = &settled.status else {
+        let IntentStatus::Settled { proof, filled_at, elapsed_ms, .. } = &settled.status else {
             panic!("expected settled");
         };
 

@@ -10,7 +10,8 @@ import type { ProofView } from "../types/bindings";
  *
  * Every figure here is evidence, so every figure is real or absent. The hash is
  * the settling transaction's, taken from the receipt the settlement held rather
- * than read back afterwards. The timing is measured across the actual call. The
+ * than read back afterwards — or, when this device only saw its signature spent
+ * on chain, the intent's own hash, labelled as one. The timing is measured across the actual call. The
  * route is the hops the intent travelled, and an empty one says so instead of
  * inventing a path. The fill price is the condition's own price — an intent
  * with no condition has no price it filled at, and renders none rather than
@@ -49,6 +50,10 @@ export function Settled({ id, onDone }: { id: IntentId; onDone: () => void }) {
       // the hash is on screen and selectable either way.
     }
   };
+
+  // An intent hash is not a transaction hash: searching an explorer for it as
+  // one finds nothing.
+  const hashLabel = proof?.hashKind === "INTENT" ? "INTENT HASH" : "TRANSACTION HASH";
 
   if (error) {
     return (
@@ -104,13 +109,13 @@ export function Settled({ id, onDone }: { id: IntentId; onDone: () => void }) {
                 color: "var(--text-muted)",
               }}
             >
-              TRANSACTION HASH
+              {hashLabel}
             </span>
             <button
               type="button"
               className="cm-touch"
               onClick={copyHash}
-              aria-label="Copy transaction hash"
+              aria-label={`Copy ${hashLabel.toLowerCase()}`}
               style={{
                 background: "none",
                 border: "none",

@@ -247,8 +247,8 @@ impl Ledger {
     /// Chain reconciliation may repair the old pair-level rejection bug.
     /// Ordinary transitions still cannot leave a terminal state. Only the
     /// settlement module calls this, after checking our own signed proof.
-    pub(crate) fn confirm_settled(&self, id: &IntentId, proof: cabal_core::ProofHash, filled_at: UsdPrice, elapsed_ms: u32, now_ms: u64) -> Result<Intent, AppError> {
-        let next = IntentStatus::Settled { proof, filled_at, elapsed_ms };
+    pub(crate) fn confirm_settled(&self, id: &IntentId, proof: cabal_core::ProofHash, proof_kind: cabal_core::ProofKind, filled_at: UsdPrice, elapsed_ms: u32, now_ms: u64) -> Result<Intent, AppError> {
+        let next = IntentStatus::Settled { proof, proof_kind, filled_at, elapsed_ms };
         self.update(id, |intent| {
             let repair = matches!(intent.status, IntentStatus::Failed { reason: cabal_core::FailureReason::SettlementRejected })
                 && intent.deal.as_ref().is_some_and(|deal| deal.signed_until_ms.is_some());
@@ -501,6 +501,7 @@ mod tests {
     fn settled() -> IntentStatus {
         IntentStatus::Settled {
             proof: ProofHash::new("0xa4f2c9e1b70d5533"),
+            proof_kind: cabal_core::ProofKind::Transaction,
             filled_at: UsdPrice::from_cents(9421),
             elapsed_ms: 11_400,
         }
@@ -779,13 +780,13 @@ mod tests {
             ledger.propose_deal(&intent.id, "deal", UsdPrice::from_cents(404), "peer");
             if signed { assert!(ledger.mark_signed(&intent.id, 9_000)); }
             ledger.advance(&intent.id, status.clone(), 2_000).unwrap();
-            let result = ledger.confirm_settled(&intent.id, ProofHash::new("verified"), UsdPrice::from_cents(404), 3_000, 4_000);
+            let result = ledger.confirm_settled(&intent.id, ProofHash::new("verified"), cabal_core::ProofKind::Transaction, UsdPrice::from_cents(404), 3_000, 4_000);
             let repairable = signed && matches!(status, IntentStatus::Failed { reason: cabal_core::FailureReason::SettlementRejected });
             assert_eq!(result.is_ok(), repairable);
             if !repairable { assert_eq!(ledger.get(&intent.id).unwrap().status, status); }
             else {
                 assert!(ledger.advance(&intent.id, IntentStatus::Waiting, 5_000).is_err());
-                assert!(ledger.confirm_settled(&intent.id, ProofHash::new("replacement"), UsdPrice::from_cents(404), 3_000, 5_000).is_err());
+                assert!(ledger.confirm_settled(&intent.id, ProofHash::new("replacement"), cabal_core::ProofKind::Transaction, UsdPrice::from_cents(404), 3_000, 5_000).is_err());
             }
         }
     }
