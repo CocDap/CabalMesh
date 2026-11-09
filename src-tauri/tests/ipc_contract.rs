@@ -222,6 +222,7 @@ fn signed_diff_shape() {
         chain: Chain::NearTestnet,
         side: "sell".into(),
         payload: token_diff_payload(&keypair, &verifier, &diff, None, 1_900_000_000_000, [7; 32]),
+        submitting: true,
     }));
 }
 

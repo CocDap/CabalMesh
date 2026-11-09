@@ -1,6 +1,6 @@
 ---
 source: tests/ipc_contract.rs
-expression: "shape(&SignedDiff\n{\n    deal_id: \"a:b\".into(), chain: Chain::NearTestnet, side: \"sell\".into(),\n    payload:\n    token_diff_payload(&keypair, &verifier, &diff, 1_900_000_000_000,\n    [7; 32]),\n})"
+expression: "shape(&SignedDiff\n{\n    deal_id: \"a:b\".into(), chain: Chain::NearTestnet, side: \"sell\".into(),\n    payload:\n    token_diff_payload(&keypair, &verifier, &diff, None, 1_900_000_000_000,\n    [7; 32]), submitting: true,\n})"
 ---
 {
   "dealId": "a:b",
@@ -15,5 +15,6 @@ expression: "shape(&SignedDiff\n{\n    deal_id: \"a:b\".into(), chain: Chain::Ne
     },
     "public_key": "ed25519:AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9",
     "signature": "ed25519:41XrVDsjhq4WVjLzVPW7XKYJB5Z9HuUHdA2X2p86QhujWt4wy4UwkTuX49AeNWvgQixp2LKAejoYb3hE6RJb3Gwd"
-  }
+  },
+  "submitting": true
 }

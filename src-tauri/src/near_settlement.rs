@@ -34,6 +34,13 @@ use std::time::Duration;
 /// no mesh peers would otherwise never be told it can reach the chain.
 pub const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How long a device that completed a pair from a peer's flood leaves it to
+/// that peer, which said it is submitting. Two funded phones otherwise both
+/// send the same pair in the same block, and the verifier refuses the second
+/// with "nonce was already used" after its gas is spent. After this, the
+/// pair is a backup: sent only if the chain shows it still unspent.
+const SUBMIT_GRACE_MS: u64 = 20_000;
+
 /// Peer-only/closed entries remembered at once. Still-binding local signatures
 /// are retained separately so mesh traffic cannot evict their proof.
 const MAX_DEALS: usize = 256;
@@ -65,6 +72,10 @@ pub struct SignedDiff {
     /// `sell` or `buy`.
     pub side: String,
     pub payload: MultiPayload,
+    /// The sender holds both halves now and is sending the pair itself.
+    /// Absent from older peers, which never coordinated.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub submitting: bool,
 }
 
 /// What a gateway floods once a pair is on-chain.
@@ -86,6 +97,10 @@ struct Entry {
     /// Set only by local signing, never by a message from the mesh.
     #[serde(default)]
     own_side: Option<Action>,
+    /// Left to the peer that said it is submitting, until this time. Zero
+    /// when nobody else claimed the submission.
+    #[serde(default)]
+    defer_until_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -185,6 +200,25 @@ impl DiffBook {
         }
         let pair = [entry.sell.clone()?, entry.buy.clone()?];
         self.in_flight.lock().unwrap_or_else(PoisonError::into_inner).insert(deal_id.to_owned()).then_some(pair)
+    }
+
+    /// Leaves a deal to the peer submitting it until `until_ms`.
+    pub fn defer(&self, deal_id: &str, until_ms: u64) {
+        let mut file = self.file.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(entry) = file.deals.get_mut(deal_id) {
+            entry.defer_until_ms = entry.defer_until_ms.max(until_ms);
+            self.persist(&file);
+        }
+    }
+
+    /// Until when a deal is left to its submitter, if it ever was.
+    fn deferred_until(&self, deal_id: &str) -> Option<u64> {
+        let file = self.file.lock().unwrap_or_else(PoisonError::into_inner);
+        file.deals.get(deal_id).map(|entry| entry.defer_until_ms).filter(|until| *until > 0)
+    }
+
+    fn in_flight(&self, deal_id: &str) -> bool {
+        self.in_flight.lock().unwrap_or_else(PoisonError::into_inner).contains(deal_id)
     }
 
     fn release(&self, deal_id: &str) {
@@ -353,7 +387,10 @@ pub fn sign_own_half(
         return None;
     }
 
-    Some(SignedDiff { deal_id: terms.id.clone(), chain: intent.draft.chain, side: side.to_owned(), payload })
+    // Holding the other half means this signature completes the pair, so this
+    // device sends it; the peer is told so it does not send it too.
+    let submitting = book.half(&terms.id, opposite(intent.draft.action)).is_some();
+    Some(SignedDiff { deal_id: terms.id.clone(), chain: intent.draft.chain, side: side.to_owned(), payload, submitting })
 }
 
 /// The nonce for a new signature. With no salt ever seen, 32 random bytes: the
@@ -435,6 +472,9 @@ pub fn receive_diff(ledger: &Ledger, book: &DiffBook, chain: Chain, verifier: &s
     }
     book.insert(&message.deal_id, side, message.payload.clone());
     if book.half(&message.deal_id, side).as_ref() != Some(&message.payload) { return false; }
+    if message.submitting {
+        book.defer(&message.deal_id, now_ms() + SUBMIT_GRACE_MS);
+    }
     if let Some(own) = own {
         if let Ok(signer) = message.payload.signer_id() {
             if own.counterparty.as_deref() != Some(signer.as_str()) {
@@ -490,9 +530,29 @@ pub type Submitted = SettlementComplete;
 pub async fn submit_held(ledger: &Ledger, book: &DiffBook, bridge: &NearBridge) -> Vec<Submitted> {
     let mut submitted = Vec::new();
     for deal in book.held() {
+        let deferred = book.deferred_until(&deal);
+        if deferred.is_some_and(|until| until > now_ms()) {
+            continue;
+        }
         let Some(pair) = book.claim(&deal) else {
             continue;
         };
+        if deferred.is_some() {
+            // A backup for a peer that said it was submitting: it has most
+            // likely landed, and a second send would only burn gas.
+            match spent(bridge, &pair[0]).await {
+                Ok(true) => {
+                    book.mark_pair_submitted(&deal, &pair);
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::debug!(target: "cabalmesh::settlement", %deal, %error, "could not check a deferred pair");
+                    book.release(&deal);
+                    continue;
+                }
+            }
+        }
         let local = intent_of_deal(ledger, &deal);
         let own = local.as_ref().and_then(|intent| owned_half(intent, book, bridge));
         let keep = local.as_ref().filter(|_| own.is_some()).map(|intent| intent.draft.action);
@@ -549,6 +609,12 @@ pub async fn submit_held(ledger: &Ledger, book: &DiffBook, bridge: &NearBridge) 
     submitted
 }
 
+/// Whether the verifier has already consumed this half's nonce.
+async fn spent(bridge: &NearBridge, half: &MultiPayload) -> Result<bool, NearError> {
+    let signer = half.signer_id().map_err(|_| NearError::Rpc("half has no signer".into()))?;
+    bridge.nonce_used(signer.as_str(), &half.payload.nonce).await
+}
+
 /// Takes a report that a deal settled. Stored until it is checked against the
 /// chain, so a device with no route keeps its claim for later.
 pub fn receive_report(ledger: &Ledger, details: &str) -> Option<IntentId> {
@@ -568,6 +634,9 @@ pub async fn confirm_reports(ledger: &Ledger, book: &DiffBook, bridge: &NearBrid
     for intent in ledger.all() {
         let Some(terms) = &intent.deal else { continue; };
         if !can_reconcile(&intent) { continue; }
+        // Its own submission is outstanding and returns the transaction hash.
+        // Settling it from the spent nonce now would keep only the intent hash.
+        if book.in_flight(&terms.id) { continue; }
         let Some(own) = owned_half(&intent, book, bridge) else { continue; };
         let Ok(hash) = own.hash() else { continue; };
         let needle = bs58::encode(hash).into_string();
@@ -665,6 +734,7 @@ fn halves_to_resend(ledger: &Ledger, book: &DiffBook, now: u64) -> Vec<SignedDif
                 chain: intent.draft.chain,
                 side: side.to_owned(),
                 payload: book.half(&terms.id, intent.draft.action)?,
+                submitting: false,
             })
         })
         .collect()
@@ -790,8 +860,31 @@ mod tests {
             chain: Chain::NearTestnet,
             side: side.into(),
             payload,
+            submitting: false,
         })
         .unwrap()
+    }
+
+    /// A half from the device that completed the pair and is submitting it.
+    fn submitting_message(deal: &str, side: &str, payload: MultiPayload) -> String {
+        serde_json::to_string(&SignedDiff {
+            deal_id: deal.into(),
+            chain: Chain::NearTestnet,
+            side: side.into(),
+            payload,
+            submitting: true,
+        })
+        .unwrap()
+    }
+
+    fn submit_rpc(nonce_used: bool) -> impl Fn(&str, &serde_json::Value) -> serde_json::Value + Send + Sync + 'static {
+        move |method, params| {
+            healthy(method, params, |view| match view {
+                "simulate_intents" => Some(json!({})),
+                "is_nonce_used" => Some(json!(nonce_used)),
+                _ => None,
+            })
+        }
     }
 
     #[test]
@@ -1471,5 +1564,82 @@ mod tests {
         let nonce = fresh_nonce(Some([0xfc, 0x4d, 0x10, 0xf1]), 1_000);
         assert_eq!(&nonce[5..9], &[0xfc, 0x4d, 0x10, 0xf1]);
         assert_ne!(fresh_nonce(None, 1_000), fresh_nonce(None, 1_000));
+    }
+
+    // Both phones were funded gateways. The buyer signed last, held both
+    // halves and submitted; the seller completed the same pair from the
+    // buyer's flood and submitted it in the same block. The verifier ran the
+    // buyer's first and the seller's panicked: "nonce was already used".
+
+    #[tokio::test]
+    async fn a_pair_whose_last_signer_is_submitting_is_left_to_it() {
+        let fx = fixture();
+        waiting_intent(&fx, "d", Action::Sell);
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
+        assert!(receive_diff(&fx.ledger, &fx.book, Chain::NearTestnet, VERIFIER, &submitting_message("d", "buy", half(2, Action::Buy))));
+
+        let rpc = MockRpc::serve(submit_rpc(false)).await;
+        assert!(submit_held(&fx.ledger, &fx.book, &bridge(&rpc.url)).await.is_empty());
+        assert!(!rpc.order().iter().any(|m| m == "send_tx"), "the peer is submitting; a second send only burns gas");
+        assert_eq!(fx.book.held(), vec!["d".to_owned()], "kept as a backup");
+    }
+
+    #[tokio::test]
+    async fn a_backup_does_not_resend_a_pair_already_spent() {
+        let fx = fixture();
+        waiting_intent(&fx, "d", Action::Sell);
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
+        fx.book.insert("d", Action::Buy, half(2, Action::Buy));
+        fx.book.defer("d", 1);
+
+        let rpc = MockRpc::serve(submit_rpc(true)).await;
+        assert!(submit_held(&fx.ledger, &fx.book, &bridge(&rpc.url)).await.is_empty());
+        assert!(!rpc.order().iter().any(|m| m == "send_tx"));
+        assert!(fx.book.held().is_empty(), "spent on chain, so nothing is left to send");
+    }
+
+    #[tokio::test]
+    async fn a_backup_submits_once_the_submitter_did_not() {
+        let fx = fixture();
+        waiting_intent(&fx, "d", Action::Sell);
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
+        fx.book.insert("d", Action::Buy, half(2, Action::Buy));
+        fx.book.defer("d", 1);
+
+        let rpc = MockRpc::serve(submit_rpc(false)).await;
+        assert_eq!(submit_held(&fx.ledger, &fx.book, &bridge(&rpc.url)).await.len(), 1);
+        assert_eq!(rpc.order().iter().filter(|m| *m == "send_tx").count(), 1);
+    }
+
+    #[test]
+    fn the_signer_that_completes_the_pair_says_it_is_submitting() {
+        let fx = fixture();
+        let first = dealt_intent(&fx, "a", Action::Sell);
+        assert!(!sign(&fx, &first).unwrap().submitting, "the other half is not here yet");
+
+        let last = dealt_intent(&fx, "b", Action::Sell);
+        fx.book.insert("b", Action::Buy, half(2, Action::Buy));
+        assert!(sign(&fx, &last).unwrap().submitting, "this signature completes the pair");
+    }
+
+    // The buyer's own submission landed, but a concurrent retry saw its nonce
+    // spent first and settled the intent with the intent hash.
+
+    #[tokio::test]
+    async fn reconciliation_leaves_a_deal_being_submitted_to_its_submission() {
+        let fx = fixture();
+        let id = waiting_intent(&fx, "d", Action::Sell);
+        fx.book.hold_own("d", Action::Sell, half(1, Action::Sell)).unwrap();
+        fx.book.insert("d", Action::Buy, half(2, Action::Buy));
+        assert!(fx.book.claim("d").is_some());
+
+        let used = MockRpc::serve(nonce_rpc(true)).await;
+        confirm_reports(&fx.ledger, &fx.book, &bridge(&used.url)).await;
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Waiting),
+            "the submission in flight will return the transaction hash");
+
+        fx.book.release("d");
+        confirm_reports(&fx.ledger, &fx.book, &bridge(&used.url)).await;
+        assert!(matches!(fx.ledger.get(&id).unwrap().status, IntentStatus::Settled { proof_kind: ProofKind::Intent, .. }));
     }
 }

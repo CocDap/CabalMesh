@@ -1671,7 +1671,7 @@ async fn run_settlement(
         settlement::sign_own_half(ledger, state.diff_book(), &intent, &keypair, &verifier, &config.near(), salt, crate::intents::now_ms())
     });
 
-    let Some(message) = signed else {
+    let Some(mut message) = signed else {
         // A second tap that lost to the first. The first one carries the deal.
         if ledger.get(&id).and_then(|now| now.deal).is_some_and(|deal| deal.signed_until_ms.is_some()) {
             let _ = ledger.advance(&id, IntentStatus::Waiting, crate::intents::now_ms());
@@ -1688,6 +1688,11 @@ async fn run_settlement(
         return;
     };
 
+    // A device that cannot reach the chain will not send the pair, so it must
+    // not tell the peer to leave it alone.
+    if message.submitting && settlement::gateway(&state).await.is_none() {
+        message.submitting = false;
+    }
     settlement::flood(&services, "diff", settlement::tagged("SignedDiff", &message).to_string()).await;
     ledger.record(&id, line("SIGNED. WAITING FOR THE OTHER SIDE.", LogTone::Ok));
     let _ = ledger.advance(&id, IntentStatus::Waiting, crate::intents::now_ms());

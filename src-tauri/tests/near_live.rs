@@ -303,6 +303,7 @@ async fn a_mismatched_pair_is_rejected_without_moving_funds() {
         chain: Chain::NearTestnet,
         side: "buy".into(),
         payload: cheap,
+        submitting: false,
     }));
 
     assert!(settlement::submit_held(&a.ledger, &a.book, &gateway).await.is_empty());
