@@ -182,6 +182,17 @@ Prove a trade is valid without revealing what the agents keep private. No code y
 - [ ] **On-chain verifier.** A NEAR contract verifies the proof at settlement.
 - [ ] **On-device prover.** Proofs are generated on iOS, Android and desktop, with no server involved.
 
+### P7: On-device AI
+
+The P4 trading agent runs on the phone itself, with no provider and no Internet, on devices with 8 GB of RAM or more. No code yet.
+
+- [ ] **Base model.** A small open model (1–4B parameters) that handles function calling, picked by measuring it against the P4 tools.
+- [ ] **Fine-tune for buy and sell.** LoRA on negotiation transcripts: reading market price and mesh offers, countering within 3 rounds, and stopping instead of chasing a bad price.
+- [ ] **Quantization.** 4-bit weights (GGUF or the platform's own format) that fit in about 3 GB of memory, leaving room for the app and the mesh.
+- [ ] **Mobile runtime.** Inference on iOS and Android, on the GPU or NPU where the device has one, with the model downloaded once and checked against a hash.
+- [ ] **Evaluation.** Tool-call accuracy, deal quality against the built-in price, and time per round on a real 8 GB phone. The code still enforces your price limit whatever the model says.
+- [ ] **Fallback.** Below 8 GB, or when the model is not downloaded, the agent uses BYOK or the built-in price as it does today.
+
 ## Contributing
 
 Fork, branch, and open a PR. New Tauri commands must be registered in five places (`commands.rs`, `generate_handler!` in `lib.rs`, `build.rs`, and both capability files), followed by `npm run bindings`.
