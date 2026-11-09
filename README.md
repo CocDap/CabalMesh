@@ -4,6 +4,10 @@
 
 CabalMesh is a privacy-first desktop and mobile app (Tauri 2: Rust + React). Two people state what they want ("sell 1 wNEAR above $3.90"). Their devices find each other over the mesh, even with no internet. Local AI agents agree on a price inside each user's bounds. Each side signs its half of the swap offline, and whichever peer reaches the internet first submits both halves to the NEAR Intents verifier, which swaps the funds in one atomic step.
 
+## How a trade works
+
+![How a trade works: seller and buyer phones trade offline over the mesh, and a gateway with internet settles the matched pair on NEAR Intents](docs/screenshots/how-a-trade-works.png)
+
 ## How a trade settles on NEAR Intents
 
 ```
@@ -139,7 +143,7 @@ cd src-tauri && cargo test --test near_live -- --ignored --test-threads=1
 ### P2: NEAR contracts
 
 - [x] Gateway rewards per settled pair: `contracts/rewards` deployed to testnet, proven by a headless test
-- [ ] Rewards paid through the app
+- [x] Rewards paid through the app: two Android phones, [demo transaction](https://testnet.nearblocks.io/txns/Gvzj9Fh5npAvteoDkDRi3c4msYiX1ymPoDWwU4LxWxpg)
 - [ ] Marketplace and modules on NEAR ([plan](docs/superpowers/plans/2026-11-05-p2b-near-marketplace-modules.md))
 
 ### P3: Bring your own model
