@@ -71,7 +71,7 @@ Other entry points:
 Splash → Unlock → Home, then the tabs Nodes, Intents, Vault and Profile.
 
 1. **New intent.** Type what you want, for example `Sell 1 wNEAR above $3.90`. The local model turns it into a draft, and you review it before anything is broadcast.
-2. **Match.** When a peer posts the opposite side of the same asset with an overlapping price, both agents propose a settlement price. If the model is unreachable, a deterministic midpoint is used instead.
+2. **Negotiate.** Your intent tells the mesh its asset, side and size, but never your price limit. When a peer posts the opposite side at the same size, the two agents trade offers for up to 3 rounds, using the market price. Code enforces your limit on every offer. If no model is reachable, a built-in price near market is used instead.
 3. **Settle.** You confirm, the app signs, and settlement happens when any node is online. With Wi-Fi off, intents still move over Bluetooth, and signed diffs wait on the mesh until a gateway appears.
 
 ## Architecture
@@ -108,6 +108,8 @@ Splash → Unlock → Home, then the tabs Nodes, Intents, Vault and Profile.
 
 Keys are stored encrypted (AES-256-GCM) in the vault, bound to the device's secure element where there is one, and recoverable through guardians. See [`docs/identity-design.md`](docs/identity-design.md).
 
+Local intent history, account snapshots and settings use SQLite. Existing JSON files are imported once and retained as backups; balances are saved only after a complete successful refresh. See [`docs/local-storage.md`](docs/local-storage.md) for the schema, migration and desktop/mobile/web storage approach.
+
 | Platform | BLE offline plane | Secure element |
 |---|---|---|
 | iOS, Android, macOS | yes | Secure Enclave / Keystore |
@@ -125,10 +127,56 @@ cd src-tauri && cargo test --test near_live -- --ignored --test-threads=1
 
 ## Roadmap
 
-1. **P1: NEAR Intents settlement.** Built and tested against live testnet: NEAR key in the vault, NEP-413 signing, `SignedDiff` over the mesh, gateway submission, deposit and withdraw in Vault. A run on two real devices is still open.
-2. **P2: NEAR contracts.** Gateway rewards paid on-chain per settled pair, then marketplace and modules on NEAR.
-3. **P3: Bring your own model.** Base URL, model name and API key per device, with presets for NEAR AI Cloud, local Ollama and OpenRouter. The key stays in the vault.
-4. **P4: Agent peer trade.** Function-calling agent with market price, mesh offers and position tools, up to 3 rounds of offers. Code enforces your price bounds, and you confirm before anything is signed.
+### P1: NEAR Intents settlement
+
+- [x] NEAR key in the vault, NEP-413 signing
+- [x] `SignedDiff` over the mesh, gateway submission
+- [x] Deposit and withdraw in Vault
+- [x] Settled on live testnet: two ledgers, third-party gateway, two app processes over libp2p
+- [x] Two Android simulators through the UI, negotiation and signatures over BLE ([evidence](docs/verification/ble-simulator-settlement/README.md))
+- [ ] Two physical devices over BLE
+
+### P2: NEAR contracts
+
+- [x] Gateway rewards per settled pair: `contracts/rewards` deployed to testnet, proven by a headless test
+- [ ] Rewards paid through the app
+- [ ] Marketplace and modules on NEAR ([plan](docs/superpowers/plans/2026-11-05-p2b-near-marketplace-modules.md))
+
+### P3: Bring your own model
+
+- [x] Base URL, model name and API key per device, set on Profile
+- [x] Presets for NEAR AI Cloud, local Ollama and OpenRouter
+- [x] Key encrypted with the vault's key; never reaches the webview or the mesh
+- [x] Tested against a real local Ollama
+- [ ] NEAR AI Cloud and OpenRouter called with a real key
+- [ ] Two devices with different providers
+
+### P4: Agent peer trade
+
+- [x] Function-calling agent with market price, mesh offers and position tools, up to 3 rounds of offers
+- [x] Code enforces your price limit, which never leaves the device; you confirm before anything is signed
+- [x] Built-in price near market when no model is reachable
+- [x] Settled on testnet between two app processes using a real local Ollama
+- [ ] Two devices with different providers
+
+### P5: Local key backup
+
+- [x] Export and import the NEAR key (`VAULT → KEYS → ADVANCED`); import verifies a named `.testnet` account
+- [x] Passphrase unlock (Argon2id), opt-in
+- [x] Guardian mesh unlock: sealed shares over BLE, release only on the guardian's tap
+- [ ] Encrypted backup file, so a wiped device restores without a raw hex key
+- [ ] 24–48h recovery delay with a veto notification
+- [ ] Mobile PIN unlock, behind a retry counter
+
+### P6: ZK Box
+
+Prove a trade is valid without revealing what the agents keep private. No code yet; the old stub was deleted on 2026-08-27.
+
+- [ ] **Private price limit.** Each offer carries a proof that it stays inside your floor or ceiling. The peer verifies it without ever learning the limit.
+- [ ] **Proof of funds.** Prove your Intents balance covers the trade size without revealing the balance, before a peer starts negotiating.
+- [ ] **Offline verification.** A gateway checks the proof attached to a `SignedDiff` over the mesh, before submitting and without an Internet connection.
+- [ ] **On-chain verifier.** A NEAR contract verifies the proof at settlement.
+- [ ] **On-device prover.** Proofs are generated on iOS, Android and desktop, with no server involved.
 
 ## Contributing
 
