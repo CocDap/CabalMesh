@@ -53,6 +53,8 @@
     "allow-near-deposit",
     "allow-near-withdraw",
     "allow-near-unwrap",
+    "allow-rewards-status",
+    "allow-rewards-claim",
     "allow-vault-assets",
     "allow-vault-refresh-balance",
     "allow-vault-export-key",

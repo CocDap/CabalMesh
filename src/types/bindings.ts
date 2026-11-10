@@ -419,6 +419,34 @@ filledAt: string | null, };
 export type ReviewRow = { key: string, value: string, };
 
 /**
+ * What the Vault's rewards card shows.
+ *
+ * The contract keeps no per-gateway history, so `submissions` and `paid` are
+ * network-wide. Only `pending` belongs to this device.
+ */
+export type RewardsView = { contract: string, explorerUrl: string, 
+/**
+ * The fee token's symbol.
+ */
+token: string, 
+/**
+ * What each side of a pair pays the gateway.
+ */
+feePerSide: string, 
+/**
+ * Pairs settled through the contract, by every gateway.
+ */
+submissions: number, 
+/**
+ * Fees paid to every gateway.
+ */
+paid: string, 
+/**
+ * Payouts to this account that failed and can be claimed.
+ */
+pending: string, canClaim: boolean, };
+
+/**
  * Current state of the vault's unlock method, for the startup gate and the
  * `SECURITY` screen.
  */

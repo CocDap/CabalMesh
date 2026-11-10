@@ -2568,6 +2568,74 @@ pub async fn near_unwrap(amount: String, state: State<'_, AppState>) -> Result<S
     Ok(result?.0)
 }
 
+/// What the Vault's rewards card shows.
+///
+/// The contract keeps no per-gateway history, so `submissions` and `paid` are
+/// network-wide. Only `pending` belongs to this device.
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct RewardsView {
+    pub contract: String,
+    pub explorer_url: String,
+    /// The fee token's symbol.
+    pub token: String,
+    /// What each side of a pair pays the gateway.
+    pub fee_per_side: String,
+    /// Pairs settled through the contract, by every gateway.
+    #[cfg_attr(feature = "ts-rs", ts(type = "number"))]
+    pub submissions: u64,
+    /// Fees paid to every gateway.
+    pub paid: String,
+    /// Payouts to this account that failed and can be claimed.
+    pub pending: String,
+    pub can_claim: bool,
+}
+
+/// The rewards contract's state, or `None` on a network that pays no gateways.
+///
+/// # Errors
+///
+/// [`AppError::NotReady`] before bootstrap, [`AppError::VaultLocked`] with no key,
+/// [`AppError::Chain`] if the contract could not be read.
+#[tauri::command]
+pub async fn rewards_status(state: State<'_, AppState>) -> Result<Option<RewardsView>, AppError> {
+    let (bridge, config) = state.services()?.near_context().await?;
+    let near = config.near();
+    let Some(fee) = near.gateway_fee() else { return Ok(None) };
+    let status = bridge.rewards_status(&fee.to).await?;
+    let amount = |raw: u128| cabal_core::TokenAmount::from_raw(raw, near.quote.decimals).to_plain_string();
+    Ok(Some(RewardsView {
+        explorer_url: format!("{}/address/{}", near.explorer, fee.to),
+        contract: fee.to.to_string(),
+        token: near.quote.symbol.to_string(),
+        fee_per_side: amount(fee.amount),
+        submissions: status.submissions,
+        paid: amount(status.paid),
+        pending: amount(status.pending),
+        can_claim: status.pending > 0,
+    }))
+}
+
+/// Claims this account's failed payouts from the rewards contract.
+///
+/// Returns the transaction hash.
+///
+/// # Errors
+///
+/// [`AppError::Unsupported`] on a network that pays no gateways,
+/// [`AppError::Chain`] with nothing to claim or if the chain refused,
+/// [`AppError::NearAccountNotFunded`] with no NEAR for gas.
+#[tauri::command]
+pub async fn rewards_claim(state: State<'_, AppState>) -> Result<String, AppError> {
+    let (bridge, config) = state.services()?.near_context().await?;
+    let fee = config.near().gateway_fee().ok_or(AppError::Unsupported { feature: "gateway rewards" })?;
+    let result = bridge.claim_rewards(&fee.to).await;
+    // The payout lands in the verifier, so refresh what the Vault shows.
+    let _ = read_and_cache(&bridge, config.network).await;
+    Ok(result?.0)
+}
+
 fn ensure_native_verifier(config: &crate::network_config::NetworkConfig) -> Result<(), AppError> {
     if config.verifier() != config.near().verifier {
         return Err(AppError::Unsupported { feature: "native NEAR on a custom verifier" });
