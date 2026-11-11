@@ -1,0 +1,173 @@
+name: Release iOS
+
+# Manual-only, in the same shape as the SciKMS release workflows: Actions tab →
+# "Release iOS" → Run workflow, then choose where the build goes.
+#
+# A signed .ipa needs the four Apple secrets below. artifact-only without them
+# still produces a simulator .app, which needs no signing and is useful for
+# checking the workflow before the Apple account is ready.
+#
+# Required secrets for a signed build:
+#   IOS_CERTIFICATE              base64 of the exported .p12
+#   IOS_CERTIFICATE_PASSWORD
+#   IOS_MOBILE_PROVISION         base64 of the .mobileprovision
+#   APPLE_DEVELOPMENT_TEAM       team ID, also used for automatic signing
+#
+# Shipping notes, both still outstanding in docs/ios-release.md:
+#   - com.apple.developer.networking.multicast must be approved for the bundle
+#     id, or signing a device build with the entitlement fails.
+#   - App Store Connect rejects builds made with Xcode older than 26. The runner
+#     image must carry Xcode 26+.
+on:
+  workflow_dispatch:
+    inputs:
+      release_mode:
+        description: "Where to publish the build"
+        required: true
+        default: "artifact-only"
+        type: choice
+        options:
+          - artifact-only      # just upload as Action artifact, no Release entry
+          - draft              # create a draft Release at tag (manual publish later)
+          - release            # publish a Release at the chosen tag
+          - nightly            # publish/overwrite the rolling 'nightly' Release
+      version_tag:
+        description: "Tag for draft / release modes (e.g. v0.1.0). Ignored for artifact-only / nightly."
+        required: false
+        default: ""
+      build_number:
+        description: "CFBundleVersion. Defaults to the workflow run number."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build CabalMesh.ipa
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate inputs
+        if: inputs.release_mode == 'draft' || inputs.release_mode == 'release'
+        env:
+          TAG: ${{ inputs.version_tag }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "::error::version_tag is required for draft and release modes."
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show
+
+      - name: Install iOS Rust targets
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Read app version
+        run: echo "APP_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_ENV"
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Detect signing secrets
+        id: signing
+        env:
+          CERT: ${{ secrets.IOS_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          PROFILE: ${{ secrets.IOS_MOBILE_PROVISION }}
+          TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+        run: |
+          if [ -n "$CERT" ] && [ -n "$CERT_PASSWORD" ] && [ -n "$PROFILE" ] && [ -n "$TEAM" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require signing to publish
+        if: inputs.release_mode != 'artifact-only' && steps.signing.outputs.signed != 'true'
+        run: |
+          echo "::error::Set IOS_CERTIFICATE, IOS_CERTIFICATE_PASSWORD, IOS_MOBILE_PROVISION and APPLE_DEVELOPMENT_TEAM to publish an iOS build."
+          exit 1
+
+      # APPLE_DEVELOPMENT_TEAM overwrites tauri.conf.json > bundle > iOS >
+      # developmentTeam, so the committed Xcode project does not need to be
+      # regenerated from project.yml first.
+      - name: Build signed IPA
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+        run: |
+          npm run tauri -- ios build \
+            --target aarch64 \
+            --export-method app-store-connect \
+            --build-number "${{ inputs.build_number || github.run_number }}" \
+            --ci
+
+      # Simulator builds need no certificate. They are not uploadable, but they
+      # prove the Rust/Swift/Xcode half compiles.
+      - name: Build simulator app (unsigned)
+        if: steps.signing.outputs.signed != 'true'
+        run: npm run tauri -- ios build --target aarch64-sim --ci
+
+      - name: Package simulator app
+        if: steps.signing.outputs.signed != 'true'
+        run: |
+          app="$(find src-tauri/gen/apple/build -type d -name '*.app' | head -n 1)"
+          if [ -z "$app" ]; then
+            echo "::error::No .app was produced under src-tauri/gen/apple/build."
+            exit 1
+          fi
+          ditto -c -k --keepParent "$app" "CabalMesh-${APP_VERSION}-ios-simulator.zip"
+
+      - name: Upload build artifact (always)
+        uses: actions/upload-artifact@v7
+        with:
+          name: CabalMesh-${{ env.APP_VERSION }}-ios
+          path: |
+            src-tauri/gen/apple/build/arm64/*.ipa
+            CabalMesh-${{ env.APP_VERSION }}-ios-simulator.zip
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish to GitHub Release (draft / release)
+        if: inputs.release_mode == 'draft' || inputs.release_mode == 'release'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.version_tag }}
+          name: ${{ inputs.version_tag }}
+          draft: ${{ inputs.release_mode == 'draft' }}
+          files: src-tauri/gen/apple/build/arm64/*.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to nightly Release
+        if: inputs.release_mode == 'nightly'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: nightly
+          name: Nightly builds
+          prerelease: true
+          files: src-tauri/gen/apple/build/arm64/*.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

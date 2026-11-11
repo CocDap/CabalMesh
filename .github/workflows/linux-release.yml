@@ -1,0 +1,119 @@
+name: Release Linux
+
+# Manual-only, in the same shape as the SciKMS release workflows: Actions tab →
+# "Release Linux" → Run workflow, then choose where the build goes.
+#
+# Builds .deb, .rpm and .AppImage on Ubuntu 22.04, the oldest glibc this project
+# supports, so the bundles run on more than the runner's own distro.
+on:
+  workflow_dispatch:
+    inputs:
+      release_mode:
+        description: "Where to publish the build"
+        required: true
+        default: "artifact-only"
+        type: choice
+        options:
+          - artifact-only      # just upload as Action artifact, no Release entry
+          - draft              # create a draft Release at tag (manual publish later)
+          - release            # publish a Release at the chosen tag
+          - nightly            # publish/overwrite the rolling 'nightly' Release
+      version_tag:
+        description: "Tag for draft / release modes (e.g. v0.1.0). Ignored for artifact-only / nightly."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build CabalMesh (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate inputs
+        if: inputs.release_mode == 'draft' || inputs.release_mode == 'release'
+        env:
+          TAG: ${{ inputs.version_tag }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "::error::version_tag is required for draft and release modes."
+            exit 1
+          fi
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake ninja-build \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            libssl-dev libfuse2 patchelf xdg-utils
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Read app version
+        run: echo "APP_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_ENV"
+
+      - name: Build Linux bundles
+        run: npm run tauri -- build --ci
+
+      - name: Upload build artifact (always)
+        uses: actions/upload-artifact@v7
+        with:
+          name: CabalMesh-${{ env.APP_VERSION }}-linux-x86_64
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to GitHub Release (draft / release)
+        if: inputs.release_mode == 'draft' || inputs.release_mode == 'release'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.version_tag }}
+          name: ${{ inputs.version_tag }}
+          draft: ${{ inputs.release_mode == 'draft' }}
+          files: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to nightly Release
+        if: inputs.release_mode == 'nightly'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: nightly
+          name: Nightly builds
+          prerelease: true
+          files: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
