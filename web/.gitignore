@@ -1,0 +1,7 @@
+node_modules/
+dist/
+shots/
+.taste-skill/chrome-*/
+.taste-skill/consistency/
+.taste-skill/gate/
+dist-ssr/
