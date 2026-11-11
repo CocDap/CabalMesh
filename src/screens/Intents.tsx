@@ -33,10 +33,12 @@ export function Intents({
   tab,
   onTabChange,
   onCompose,
+  onOpen,
 }: {
   tab: IntentTab;
   onTabChange: (tab: IntentTab) => void;
   onCompose: () => void;
+  onOpen: (id: string) => void;
 }) {
   const [intents, setIntents] = useState<IntentView[] | null>(null);
 
@@ -126,7 +128,7 @@ export function Intents({
       ) : (
         <>
           {intents.map((intent) => (
-            <IntentRow key={intent.id} intent={intent} />
+            <IntentRow key={intent.id} intent={intent} onOpen={onOpen} />
           ))}
           <Button tone="secondary" size="lg" block className="cm-touch" onClick={onCompose}>
             + NEW INTENT
@@ -137,7 +139,7 @@ export function Intents({
   );
 }
 
-function IntentRow({ intent }: { intent: IntentView }) {
+function IntentRow({ intent, onOpen }: { intent: IntentView; onOpen: (id: string) => void }) {
   const status = intent.status.status;
   const tone =
     status === "SETTLED"
@@ -149,22 +151,51 @@ function IntentRow({ intent }: { intent: IntentView }) {
           : "info";
 
   return (
-    <Panel>
-      <div
+    <Panel pad={false}>
+      <button
+        type="button"
         className="cm-row"
-        style={{ padding: "var(--space-6)", display: "flex", flexDirection: "column", gap: "var(--space-5)" }}
+        onClick={() => onOpen(intent.id)}
+        aria-label={`${intent.title}. ${intent.subtitle}. ${status.replace("_", " ")}. ${intent.amount}. Open details.`}
+        style={{
+          background: "none",
+          border: "none",
+          width: "100%",
+          textAlign: "left",
+          color: "inherit",
+          font: "inherit",
+          cursor: "pointer",
+          padding: "var(--space-6)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "var(--space-5)",
+        }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-          <span
-            style={{
-              fontFamily: "var(--type-heading-family)",
-              fontSize: "var(--text-sm)",
-              letterSpacing: "var(--type-heading-tracking)",
-              color: "var(--text-primary)",
-            }}
-          >
-            {intent.title}
-          </span>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "var(--space-5)" }}>
+            <span
+              style={{
+                fontFamily: "var(--type-heading-family)",
+                fontSize: "var(--text-sm)",
+                letterSpacing: "var(--type-heading-tracking)",
+                color: "var(--text-primary)",
+              }}
+            >
+              {intent.title}
+            </span>
+            {/* A row that opens something has to look like it does, and the
+                chevron is decorative — the button's name already says it. */}
+            <span
+              aria-hidden="true"
+              style={{
+                fontFamily: "var(--type-label-family)",
+                fontSize: "var(--text-sm)",
+                color: "var(--text-muted)",
+              }}
+            >
+              →
+            </span>
+          </div>
           <span
             style={{
               fontFamily: "var(--type-label-family)",
@@ -217,7 +248,7 @@ function IntentRow({ intent }: { intent: IntentView }) {
             {intent.elapsed}
           </span>
         </div>
-      </div>
+      </button>
     </Panel>
   );
 }
