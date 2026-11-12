@@ -30,7 +30,13 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
+      # libapp.a is linked via LIBRARY_SEARCH_PATHS + the libapp.a dependency
+      # below. Excluding it here keeps a regen from freezing whichever
+      # Externals/<arch>/<config>/libapp.a happened to exist into the project
+      # (as a bundled resource that breaks builds of the other configuration).
       - path: Externals
+        excludes:
+          - "**/*.a"
       - path: cabalmesh_iOS
       - path: assets
         buildPhase: resources

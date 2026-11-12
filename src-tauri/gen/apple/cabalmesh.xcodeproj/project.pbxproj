@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		08510854BD7E3A26E15E1071 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ABB33E20ADCC8A76E27BE0E9 /* CoreBluetooth.framework */; };
 		2BD5B468306EE5F8D771E986 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F26887C1D2093F6A6BB91078 /* MetalKit.framework */; };
 		2EA39FD9AB876BC80C0518E4 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 717C049A78CF4413B804A16C /* Metal.framework */; };
 		2F6E7946D324C5B410A24A88 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D8133057397DE9C7EB46A61 /* CoreGraphics.framework */; };
@@ -15,7 +16,6 @@
 		84F65E160396ADEA7CC4EE5A /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 6E5666DC468B633EE473CC90 /* assets */; };
 		87CC65AA7A173E3FE3E3441A /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = A2DCED555297681A26965E44 /* LaunchScreen.storyboard */; };
 		917376E5018DF820DD0DC049 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F6B0D6FDEC29280428D5EE38 /* SystemConfiguration.framework */; };
-		952C3782799CD292F4C5CE59 /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = 6BB2419FBE7B2E26258426D7 /* libapp.a */; };
 		9D67C37A6F6C8A21944AF738 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 44E0A1C08E587279DBB5CEE4 /* libapp.a */; };
 		DEE8FA9148B6956947CEF090 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FB2EDF62D64E3BC1BC014CC2 /* Security.framework */; };
 		F1CAEC91966DC3C6E020ADC8 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC2884E931CDED4F81B162BD /* UIKit.framework */; };
@@ -24,35 +24,70 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0482FF7147386673C55AB3B6 /* security_state.rs */ = {isa = PBXFileReference; path = security_state.rs; sourceTree = "<group>"; };
+		069FDEEE4B19829527CAF814 /* vault_key.rs */ = {isa = PBXFileReference; path = vault_key.rs; sourceTree = "<group>"; };
+		089CDB7FA613AC034CA94166 /* standing.rs */ = {isa = PBXFileReference; path = standing.rs; sourceTree = "<group>"; };
+		18D3E1E7242C95533C448464 /* tls.rs */ = {isa = PBXFileReference; path = tls.rs; sourceTree = "<group>"; };
 		1C4D340AB4F3A77BD77D0540 /* ollama_manager.rs */ = {isa = PBXFileReference; path = ollama_manager.rs; sourceTree = "<group>"; };
+		23A89DBE66CB64F913B61C2E /* bindings.rs */ = {isa = PBXFileReference; path = bindings.rs; sourceTree = "<group>"; };
+		297082F93156AB7E65CAF53F /* mesh_handle.rs */ = {isa = PBXFileReference; path = mesh_handle.rs; sourceTree = "<group>"; };
 		2D0528F88DDE4F56717E7485 /* app_initializer.rs */ = {isa = PBXFileReference; path = app_initializer.rs; sourceTree = "<group>"; };
+		31A37E80B55337A1B156818C /* price_feed.rs */ = {isa = PBXFileReference; path = price_feed.rs; sourceTree = "<group>"; };
+		3EF7D406EA1D6CD62413E18F /* network_config.rs */ = {isa = PBXFileReference; path = network_config.rs; sourceTree = "<group>"; };
+		3F2D23C5D83B0D320813BDA6 /* near_bridge.rs */ = {isa = PBXFileReference; path = near_bridge.rs; sourceTree = "<group>"; };
 		44E0A1C08E587279DBB5CEE4 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		460B38C2C3B2568FB603697A /* install.rs */ = {isa = PBXFileReference; path = install.rs; sourceTree = "<group>"; };
+		4998105490983D61064884A0 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		529CDEB16D15898CCEFBEB3C /* intents.rs */ = {isa = PBXFileReference; path = intents.rs; sourceTree = "<group>"; };
 		5519D6633873728B0F0604E0 /* platform.rs */ = {isa = PBXFileReference; path = platform.rs; sourceTree = "<group>"; };
 		5D8133057397DE9C7EB46A61 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
-		5DEFBDD5CFAF068723C5F7C3 /* blockchain_bridge.rs */ = {isa = PBXFileReference; path = blockchain_bridge.rs; sourceTree = "<group>"; };
 		5E71DF7CA96CF870DCA9B90C /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		6101DDC15BCB9554A31BD117 /* device_binding.rs */ = {isa = PBXFileReference; path = device_binding.rs; sourceTree = "<group>"; };
 		6381BF9D971DAC1D56771A71 /* app_paths.rs */ = {isa = PBXFileReference; path = app_paths.rs; sourceTree = "<group>"; };
-		6BB2419FBE7B2E26258426D7 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		69DD40E312C887284E05F340 /* link.rs */ = {isa = PBXFileReference; path = link.rs; sourceTree = "<group>"; };
 		6E5666DC468B633EE473CC90 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		717C049A78CF4413B804A16C /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		718F8D7FB87595CE4692BB7F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		71AED532A79EFAC5446CBF2D /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
+		76ACC4169500B3E7BA5117E6 /* guardian_actor.rs */ = {isa = PBXFileReference; path = guardian_actor.rs; sourceTree = "<group>"; };
+		8AD751A2C343701835405A5A /* corebluetooth.rs */ = {isa = PBXFileReference; path = corebluetooth.rs; sourceTree = "<group>"; };
 		8B70F2FC4F5317E812A9C337 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		90000997BEE281871D4224AA /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
-		953D1C2690441D9BD5964DA6 /* ollama_config.rs */ = {isa = PBXFileReference; path = ollama_config.rs; sourceTree = "<group>"; };
+		91448A47ED74C6F847A245D5 /* bootstrap_config.rs */ = {isa = PBXFileReference; path = bootstrap_config.rs; sourceTree = "<group>"; };
+		947E00D34C02D10490F4293B /* agent_tools.rs */ = {isa = PBXFileReference; path = agent_tools.rs; sourceTree = "<group>"; };
 		983D513F75DD7FDFB0F210F7 /* cabalmesh_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = cabalmesh_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A099C0FD0200B4DA0968F1B /* mesh.rs */ = {isa = PBXFileReference; path = mesh.rs; sourceTree = "<group>"; };
+		9A5D0D62367CFA88C9D32BA7 /* identity.rs */ = {isa = PBXFileReference; path = identity.rs; sourceTree = "<group>"; };
+		A0954024248B95570845D289 /* guardian.rs */ = {isa = PBXFileReference; path = guardian.rs; sourceTree = "<group>"; };
+		A18B7F640D23FC8AAEA95E13 /* intent_chat.rs */ = {isa = PBXFileReference; path = intent_chat.rs; sourceTree = "<group>"; };
+		A224E33938F4FFA7526C30E8 /* error.rs */ = {isa = PBXFileReference; path = error.rs; sourceTree = "<group>"; };
 		A2DCED555297681A26965E44 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		A51C69AB2ACB480960A0C516 /* llm_client.rs */ = {isa = PBXFileReference; path = llm_client.rs; sourceTree = "<group>"; };
+		A619E0488442DF873FA9C5EB /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
+		A8811F499C9526C521BBD241 /* multicast.rs */ = {isa = PBXFileReference; path = multicast.rs; sourceTree = "<group>"; };
 		AB4D0367C77D1B030CA0222D /* agent.rs */ = {isa = PBXFileReference; path = agent.rs; sourceTree = "<group>"; };
-		AB5EA15BDA0FD0B4EC6C54A8 /* matcher.rs */ = {isa = PBXFileReference; path = matcher.rs; sourceTree = "<group>"; };
+		ABB33E20ADCC8A76E27BE0E9 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
 		AC6046F7CA621FBBE346372A /* cabalmesh_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = cabalmesh_iOS.entitlements; sourceTree = "<group>"; };
+		B70B035EAB97338DAE47DB81 /* state.rs */ = {isa = PBXFileReference; path = state.rs; sourceTree = "<group>"; };
+		BB1957CEE7704E0A6258981C /* wallet_setup.rs */ = {isa = PBXFileReference; path = wallet_setup.rs; sourceTree = "<group>"; };
 		BC2884E931CDED4F81B162BD /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		C4FD5275258B6FA29FAB13E2 /* llm_budget.rs */ = {isa = PBXFileReference; path = llm_budget.rs; sourceTree = "<group>"; };
+		C51D3A268E9524BA0BE1EC25 /* subscriptions.rs */ = {isa = PBXFileReference; path = subscriptions.rs; sourceTree = "<group>"; };
+		C642ADD3E7F4183572F42164 /* telemetry.rs */ = {isa = PBXFileReference; path = telemetry.rs; sourceTree = "<group>"; };
+		C7A6A9698398A7D45C1FCBC9 /* backend.rs */ = {isa = PBXFileReference; path = backend.rs; sourceTree = "<group>"; };
+		C982A18FCF78F1F97F4D9E9E /* lifecycle.rs */ = {isa = PBXFileReference; path = lifecycle.rs; sourceTree = "<group>"; };
+		CE813B9D8DC9CFE8EFFD8FCB /* native.rs */ = {isa = PBXFileReference; path = native.rs; sourceTree = "<group>"; };
 		CECBBF64C0BD5AAF15E28781 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		D3F9B6695E83FFA5D9C0AB7D /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		DCAC447ED37687A0199C35F7 /* near_settlement.rs */ = {isa = PBXFileReference; path = near_settlement.rs; sourceTree = "<group>"; };
 		E7EDBC2DB77F064D234C790E /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		ED6D8691B65CAD61A6B7C319 /* negotiation.rs */ = {isa = PBXFileReference; path = negotiation.rs; sourceTree = "<group>"; };
+		F0B4FA4F009023A19DA2518C /* balances.rs */ = {isa = PBXFileReference; path = balances.rs; sourceTree = "<group>"; };
 		F1C9E3350B20FED690426DAD /* llm_json.rs */ = {isa = PBXFileReference; path = llm_json.rs; sourceTree = "<group>"; };
 		F26887C1D2093F6A6BB91078 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		F6B0D6FDEC29280428D5EE38 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		F76192E73730CD186F69545F /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		F87732FF5FB1334834BC2E94 /* llm_config.rs */ = {isa = PBXFileReference; path = llm_config.rs; sourceTree = "<group>"; };
 		FB2EDF62D64E3BC1BC014CC2 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -62,6 +97,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				9D67C37A6F6C8A21944AF738 /* libapp.a in Frameworks */,
+				08510854BD7E3A26E15E1071 /* CoreBluetooth.framework in Frameworks */,
 				2F6E7946D324C5B410A24A88 /* CoreGraphics.framework in Frameworks */,
 				2EA39FD9AB876BC80C0518E4 /* Metal.framework in Frameworks */,
 				2BD5B468306EE5F8D771E986 /* MetalKit.framework in Frameworks */,
@@ -76,12 +112,16 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		0D51ACD2D3BF13194D9E5A90 /* debug */ = {
+		19470D9A0496B16E6DD7BFEF /* ble */ = {
 			isa = PBXGroup;
 			children = (
-				6BB2419FBE7B2E26258426D7 /* libapp.a */,
+				A619E0488442DF873FA9C5EB /* android.rs */,
+				C7A6A9698398A7D45C1FCBC9 /* backend.rs */,
+				8AD751A2C343701835405A5A /* corebluetooth.rs */,
+				69DD40E312C887284E05F340 /* link.rs */,
+				4998105490983D61064884A0 /* mod.rs */,
 			);
-			path = debug;
+			path = ble;
 			sourceTree = "<group>";
 		};
 		2125529694AA7C3F74DEE5C9 /* bindings */ = {
@@ -103,7 +143,6 @@
 		4DFACA81587DCFBEFE895EC8 /* Externals */ = {
 			isa = PBXGroup;
 			children = (
-				CBB46C6A0AA5517723FD8E69 /* arm64 */,
 			);
 			path = Externals;
 			sourceTree = "<group>";
@@ -128,18 +167,49 @@
 		96EA5C53A26F141F2EBD3415 /* src */ = {
 			isa = PBXGroup;
 			children = (
+				947E00D34C02D10490F4293B /* agent_tools.rs */,
 				AB4D0367C77D1B030CA0222D /* agent.rs */,
 				2D0528F88DDE4F56717E7485 /* app_initializer.rs */,
 				6381BF9D971DAC1D56771A71 /* app_paths.rs */,
-				5DEFBDD5CFAF068723C5F7C3 /* blockchain_bridge.rs */,
+				F0B4FA4F009023A19DA2518C /* balances.rs */,
+				23A89DBE66CB64F913B61C2E /* bindings.rs */,
+				91448A47ED74C6F847A245D5 /* bootstrap_config.rs */,
+				71AED532A79EFAC5446CBF2D /* commands.rs */,
+				6101DDC15BCB9554A31BD117 /* device_binding.rs */,
+				A224E33938F4FFA7526C30E8 /* error.rs */,
+				76ACC4169500B3E7BA5117E6 /* guardian_actor.rs */,
+				A0954024248B95570845D289 /* guardian.rs */,
+				9A5D0D62367CFA88C9D32BA7 /* identity.rs */,
+				460B38C2C3B2568FB603697A /* install.rs */,
+				A18B7F640D23FC8AAEA95E13 /* intent_chat.rs */,
+				529CDEB16D15898CCEFBEB3C /* intents.rs */,
 				E7EDBC2DB77F064D234C790E /* lib.rs */,
+				C982A18FCF78F1F97F4D9E9E /* lifecycle.rs */,
+				C4FD5275258B6FA29FAB13E2 /* llm_budget.rs */,
+				A51C69AB2ACB480960A0C516 /* llm_client.rs */,
+				F87732FF5FB1334834BC2E94 /* llm_config.rs */,
 				F1C9E3350B20FED690426DAD /* llm_json.rs */,
 				5E71DF7CA96CF870DCA9B90C /* main.rs */,
-				AB5EA15BDA0FD0B4EC6C54A8 /* matcher.rs */,
+				297082F93156AB7E65CAF53F /* mesh_handle.rs */,
 				9A099C0FD0200B4DA0968F1B /* mesh.rs */,
-				953D1C2690441D9BD5964DA6 /* ollama_config.rs */,
+				A8811F499C9526C521BBD241 /* multicast.rs */,
+				3F2D23C5D83B0D320813BDA6 /* near_bridge.rs */,
+				DCAC447ED37687A0199C35F7 /* near_settlement.rs */,
+				ED6D8691B65CAD61A6B7C319 /* negotiation.rs */,
+				3EF7D406EA1D6CD62413E18F /* network_config.rs */,
 				1C4D340AB4F3A77BD77D0540 /* ollama_manager.rs */,
 				5519D6633873728B0F0604E0 /* platform.rs */,
+				31A37E80B55337A1B156818C /* price_feed.rs */,
+				0482FF7147386673C55AB3B6 /* security_state.rs */,
+				089CDB7FA613AC034CA94166 /* standing.rs */,
+				B70B035EAB97338DAE47DB81 /* state.rs */,
+				C51D3A268E9524BA0BE1EC25 /* subscriptions.rs */,
+				C642ADD3E7F4183572F42164 /* telemetry.rs */,
+				18D3E1E7242C95533C448464 /* tls.rs */,
+				069FDEEE4B19829527CAF814 /* vault_key.rs */,
+				BB1957CEE7704E0A6258981C /* wallet_setup.rs */,
+				19470D9A0496B16E6DD7BFEF /* ble */,
+				C244129A5148E83608957015 /* near_bridge */,
 			);
 			name = src;
 			path = ../../src;
@@ -154,12 +224,12 @@
 			path = cabalmesh;
 			sourceTree = "<group>";
 		};
-		CBB46C6A0AA5517723FD8E69 /* arm64 */ = {
+		C244129A5148E83608957015 /* near_bridge */ = {
 			isa = PBXGroup;
 			children = (
-				0D51ACD2D3BF13194D9E5A90 /* debug */,
+				CE813B9D8DC9CFE8EFFD8FCB /* native.rs */,
 			);
-			path = arm64;
+			path = near_bridge;
 			sourceTree = "<group>";
 		};
 		CD432298C7972E2A282451FA = {
@@ -180,6 +250,7 @@
 		F28EB374045108320E74BAF7 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				ABB33E20ADCC8A76E27BE0E9 /* CoreBluetooth.framework */,
 				5D8133057397DE9C7EB46A61 /* CoreGraphics.framework */,
 				44E0A1C08E587279DBB5CEE4 /* libapp.a */,
 				717C049A78CF4413B804A16C /* Metal.framework */,
@@ -193,11 +264,18 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
-		"TEMP_B5B92596-664C-49A0-9DFD-54ADAF962A8F" /* x86_64 */ = {
+		"TEMP_132EAAAA-87D6-4893-AC65-03ADD5AD2C66" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
 			path = x86_64;
+			sourceTree = "<group>";
+		};
+		"TEMP_B3B65487-37D0-45CB-BB8A-98A1CAFA2B87" /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = arm64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -233,6 +311,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					2FDEAEB60E5270473BA4BBB1 = {
+						DevelopmentTeam = "${APPLE_DEVELOPMENT_TEAM}";
+					};
 				};
 			};
 			buildConfigurationList = 760C5D2CDB7376282DB239F3 /* Build configuration list for PBXProject "cabalmesh" */;
@@ -261,7 +342,6 @@
 				342EA34A4DD16E30337175FB /* Assets.xcassets in Resources */,
 				87CC65AA7A173E3FE3E3441A /* LaunchScreen.storyboard in Resources */,
 				84F65E160396ADEA7CC4EE5A /* assets in Resources */,
-				952C3782799CD292F4C5CE59 /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -432,6 +512,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = cabalmesh_iOS/cabalmesh_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = "${APPLE_DEVELOPMENT_TEAM}";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -463,6 +544,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = cabalmesh_iOS/cabalmesh_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = "${APPLE_DEVELOPMENT_TEAM}";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
