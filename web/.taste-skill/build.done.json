@@ -1,0 +1,11 @@
+{
+ "page": "dist/index.html",
+ "url": null,
+ "root": null,
+ "kind": "software",
+ "category": null,
+ "primary": null,
+ "rounds": 3,
+ "start": "2026-11-11T10:49:22.821Z",
+ "by": "gate.mjs --start"
+}

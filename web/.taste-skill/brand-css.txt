@@ -1,0 +1,24 @@
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400..700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/system.css">
+<link rel="stylesheet" href="assets/ui/cards.css">
+<link rel="stylesheet" href="assets/motion/motion.css">
+<link rel="stylesheet" href="assets/backgrounds/backgrounds.css">
+<link rel="stylesheet" href="assets/layout/layout.css">
+<link rel="stylesheet" href="assets/icons/icon.css">
+<!-- <html lang="en" data-radius="sharp">; keep this <style> after the links: layout.css resets --ly-scale -->
+<style>
+:root {
+  --p-bg: #0b0b0b; --p-surface: #151515; --p-ink: #ffffff; --p-muted: #a3a3a3;
+  --p-accent: #00e5ff; --p-accent-ink: #0b0b0b; --p-action: #00e5ff; --p-action-ink: #0b0b0b;
+  --p-inv-bg: #ffffff; --p-inv-surface: #ebebeb; --p-inv-ink: #0b0b0b; --p-inv-muted: #5b5b5b;
+  --p-inv-accent: #0b0b0b; --p-inv-accent-ink: #ffffff; --p-inv-action: #0b0b0b; --p-inv-action-ink: #ffffff;
+  --font-display: "Familjen Grotesk", system-ui, sans-serif;
+  --font-text: "Familjen Grotesk", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --display-weight: 400;
+  --display-tracking: -0.03em;
+  --display-tracking-xl: -0.04em;
+}
+</style>

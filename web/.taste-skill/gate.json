@@ -1,0 +1,258 @@
+{
+ "start": "2026-11-11T10:49:22.821Z",
+ "round": 0,
+ "idle": 0,
+ "errors": 0,
+ "status": "pass",
+ "history": [
+  {
+   "at": "2026-11-11T10:51:14.661Z",
+   "mode": "manual",
+   "status": "pass",
+   "fails": 0,
+   "round": 0,
+   "reused": false,
+   "stopHookActive": false
+  }
+ ],
+ "max": 3,
+ "marker": {
+  "page": "dist/index.html",
+  "url": null,
+  "root": null,
+  "kind": "software",
+  "category": null,
+  "primary": null,
+  "rounds": 3,
+  "start": "2026-11-11T10:49:22.821Z",
+  "by": "gate.mjs --start"
+ },
+ "manual": true,
+ "fp": "bbfa8ca0a1fa6d6f",
+ "page": "dist/index.html",
+ "found": {
+  "fails": [],
+  "warns": [
+   {
+    "check": "nav",
+    "where": "div.wrap.nav__bar > nav.nav__links > div.nav__item:nth-of-type(4) > a.nav__link \"ROADMAP\"",
+    "msg": "the nav is lopsided: its last item ends 12px inside the content's edge (1360px), while its first starts on the other edge",
+    "fix": "start the nav's first item and end its last on the content's two edges",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "scroll-reveal",
+    "where": "section#how \"A PEER-TO-PEER TRADE IN 3 STEPS AGENTS B\"",
+    "msg": "starts \"border-left-color\" (0.3 s) the moment it is scrolled into view (an IntersectionObserver) on li.mo-pc__step:nth-of-type(1) (inside a dealt moment's section, [data-moment]: an enter moment is expected on every kind; its still is judged under reduced motion)",
+    "fix": "show it at rest: no fade, rise or unmask when it is scrolled into view",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "pinned",
+    "where": "section#how > div.wrap.mo-pc__grid \"A PEER-TO-PEER TRADE IN 3 STEPS AGENTS B\"",
+    "msg": "held on screen for 1 screen of scroll (position: sticky) while the page moves on (inside a dealt moment's section, [data-moment]: expected on every kind, two moments at most, house rule; its still is judged under reduced motion)",
+    "fix": "let the section scroll with the page",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "cta",
+    "where": "section#how \"A PEER-TO-PEER TRADE IN 3 STEPS\"",
+    "msg": "a section over 1.5 screens long with no link or button in it",
+    "fix": "add the action: a button in the hero, one on every priced item, one in the closing section",
+    "widths": [
+     1440,
+     390
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "copy-headings",
+    "where": "h2#roadmap-h \"THE CABALMESH ROADMAP, TESTNET FIRST\"",
+    "msg": "\"THE CABALMESH ROADMAP, TESTNET FIRST\" names no product, part, place or section (the one brand line a page may have)",
+    "fix": "name the thing in every heading: the product, a part, the place or a section noun",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "text-contrast",
+    "where": "div.ui-win__main > ul.ui-win__rows > li.ui-win__row:nth-of-type(5) > span.ui-avatar \"P4\"",
+    "msg": "9 lines of text in drawn mocks read under 4.5:1 (5 colour pairs), the worst \"P4\" in #b3807f on #483535 at 3.44:1",
+    "fix": "lift the mocks' muted text (labels, meta, initials) to 4.5:1 on their own panel, or set it larger",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "section-gaps",
+    "where": "main#top > section.hero.hero--collage / section#app",
+    "msg": "181px between these sections, -39% against the median 296px",
+    "fix": "use one gap between sections (all within 25% of each other)",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "nav-labels",
+    "where": "div#root > header.nav > div.wrap.nav__bar > a.nav__logo \"CABALMESH\"",
+    "msg": "\"CABALMESH\" opens a section headed \"PEER-TO-PEER CRYPTO TRADING FOR OFFLINE PHONES\"",
+    "fix": "name each nav link after the heading of the section it opens",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "nav-labels",
+    "where": "div.wrap.nav__bar > nav.nav__links > div.nav__item:nth-of-type(1) > a.nav__link \"HOW IT WORKS\"",
+    "msg": "\"HOW IT WORKS\" opens a section headed \"A PEER-TO-PEER TRADE IN 3 STEPS\"",
+    "fix": "name each nav link after the heading of the section it opens",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "nav-labels",
+    "where": "div.nav__menu > div.wrap.grid > div.menu-col.span-3:nth-of-type(1) > a:nth-of-type(2) \"Three stepsBid, sign, settle on NEAR\"",
+    "msg": "\"Three stepsBid, sign, settle on NEAR\" opens a section headed \"A PEER-TO-PEER TRADE IN 3 STEPS\"",
+    "fix": "name each nav link after the heading of the section it opens",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "nav-labels",
+    "where": "div.nav__item:nth-of-type(1) > div.nav__menu > div.wrap.grid > a.menu-card.span-3 \"Agents agreed at $3.78 Round 2 of 3, on \"",
+    "msg": "\"Agents agreed at $3.78 Round 2 of 3, on \" opens a section headed \"A PEER-TO-PEER TRADE IN 3 STEPS\"",
+    "fix": "name each nav link after the heading of the section it opens",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "nav-labels",
+    "where": "div.wrap.nav__bar > nav.nav__links > div.nav__item:nth-of-type(2) > a.nav__link \"SEQUENCE\"",
+    "msg": "\"SEQUENCE\" opens a section headed \"ONE CRYPTO TRADE, MESSAGE BY MESSAGE\"",
+    "fix": "name each nav link after the heading of the section it opens",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "nav-current",
+    "where": "div#root > header.nav",
+    "msg": "the nav stays on screen with 4 links to the page's sections, but never marks the one you are in (no link changes as the page scrolls)",
+    "fix": "mark the link of the section on screen (a colour, a weight or a line under it) as the visitor scrolls",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "container-edges",
+    "where": "div.wrap.mo-pc__grid > div.mo-pc__text > ol.mo-pc__steps > li.mo-pc__step:nth-of-type(1) \"Agents bid over the Bluetooth meshYour a\"",
+    "msg": "3 text blocks start on a left line at x 106, 26px from the container's left: text starts on the container's left, or on one split line (x 623, 732, 841) (also \"Each phone signs over Bluetooth,\", \"The first peer online settles bo\") (it is in a scroll scene: told as a WARN) (SR-6)",
+    "fix": "start the text on the container's left, or on the one split line every split shares",
+    "widths": [
+     1440
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "nav",
+    "where": "div#root > header.nav > div.wrap.nav__bar > button.nav__toggle",
+    "msg": "the nav is lopsided: its last item ends 13px inside the content's edge (366px), while its first starts on the other edge",
+    "fix": "start the nav's first item and end its last on the content's two edges",
+    "widths": [
+     390
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "cut-text",
+    "where": "div.ui-term__screen > div.ui-term__track > div.ui-term__ln.ui-term__done > b \"Proof sent\"",
+    "msg": "cut 7px at the bottom by the overflow of div.wrap > div.grid > article.card.card--row:nth-of-type(1) > div.panel: a fragment run out through its panel's edge (and 2 more like it: \"to 2 phones\", \"Seller gives 0.1 wNEAR.\")",
+    "fix": "give the text room: no overflow clipping a line, no line past its box",
+    "widths": [
+     390
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "no-visual",
+    "where": "section#sequence \"ONE CRYPTO TRADE, MESSAGE BY MESSAGE\"",
+    "msg": "pictures, effects and mocks cover 19% of this section; a feature section needs a visual (about 25% or more)",
+    "fix": "give the section a visual: a UI fragment on a ground, real icons, or a photograph that fits",
+    "widths": [
+     390
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "no-visual",
+    "where": "section#roadmap \"THE CABALMESH ROADMAP, TESTNET FIRST\"",
+    "msg": "pictures, effects and mocks cover 19% of this section; a feature section needs a visual (about 25% or more)",
+    "fix": "give the section a visual: a UI fragment on a ground, real icons, or a photograph that fits",
+    "widths": [
+     390
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "cta",
+    "where": "section#roadmap \"THE CABALMESH ROADMAP, TESTNET FIRST\"",
+    "msg": "a section over 1.5 screens long with no link or button in it",
+    "fix": "add the action: a button in the hero, one on every priced item, one in the closing section",
+    "widths": [
+     390
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "heading-scale",
+    "where": "div.wrap > div.grid > article.card.card--row:nth-of-type(1) > h3 \"SUBMIT FROM ANY PEER ONLINE\"",
+    "msg": "the h3s (18px) are only 1.11x smaller than the h2s (20px): one level a clear step (1.3x or more) below the other",
+    "fix": "size headings by level: the h1 largest, one size per level, each level below the one above",
+    "widths": [
+     390
+    ],
+    "from": "consistency"
+   },
+   {
+    "check": "fade-cut",
+    "where": "div.ui-term__screen > div.ui-term__track > div.ui-term__ln.ui-term__sum > span.ui-term__val \"0.02 USDC\"",
+    "msg": "a line of div.ui.ui-panel fades out under its edge (\"0.02 USDC\"): drawn at a fraction of #ffffff on #212121, half-erased",
+    "fix": "fit the mock's rows inside its panel (fewer rows, a taller panel), or end the fade below the last whole row: no row half-erased",
+    "widths": [
+     390
+    ],
+    "from": "consistency"
+   }
+  ],
+  "crashed": [],
+  "seconds": {
+   "consistency": 108,
+   "layout": 3
+  }
+ },
+ "open": [],
+ "waived": [],
+ "warnCount": 21,
+ "at": "2026-11-11T10:51:14.662Z"
+}
