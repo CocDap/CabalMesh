@@ -494,6 +494,8 @@ pub fn run() {
             commands::near_deposit,
             commands::near_withdraw,
             commands::near_unwrap,
+            commands::rewards_status,
+            commands::rewards_claim,
             commands::vault_identities,
             commands::vault_keys,
             commands::security_status,

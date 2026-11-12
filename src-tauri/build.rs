@@ -41,6 +41,8 @@ const COMMANDS: &[&str] = &[
     "near_deposit",
     "near_withdraw",
     "near_unwrap",
+    "rewards_status",
+    "rewards_claim",
     "network_set",
     "parse_intent_chat",
     "preview_intent",

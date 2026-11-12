@@ -86,6 +86,7 @@ function App() {
           tab={screen.tab}
           onTabChange={(tab) => setScreen({ name: "intents", tab })}
           onCompose={() => setScreen({ name: "new" })}
+          onOpen={(id) => setScreen({ name: "detail", id })}
         />
       ) : screen.name === "new" ? (
         <New onBroadcast={(id) => setScreen({ name: "detail", id })} />

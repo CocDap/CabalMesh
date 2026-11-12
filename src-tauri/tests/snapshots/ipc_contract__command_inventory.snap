@@ -30,6 +30,8 @@ network_set
 parse_intent_chat
 preview_intent
 profile_summary
+rewards_claim
+rewards_status
 security_disable_passphrase
 security_enable_passphrase
 security_status

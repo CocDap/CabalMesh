@@ -4,7 +4,7 @@ import { Button, Field, Input, Panel } from "../ds";
 import { startBalanceSync } from "../state/balanceSync";
 import { errorCopy } from "../state/errorCopy";
 import { hasTokenBalance, transferAmountError, transferTokens } from "../state/vaultTransfer";
-import type { NearAccountView, NearTokenView } from "../types/bindings";
+import type { NearAccountView, NearTokenView, RewardsView } from "../types/bindings";
 import "./vault.css";
 import { WalletSetup } from "./WalletSetup";
 
@@ -153,6 +153,7 @@ export function VaultAssets() {
               {error && <p className="vault-warning" role="alert">{error} {account && "Last known balances are shown."}</p>}
             </div>
           </Panel>
+          {account && <RewardsPanel noGas={account.nativeBalance === "0"} onClaimed={() => void syncBalances(false)} />}
         </>
       )}
     </div>
@@ -300,6 +301,79 @@ function TransferPanel({ mode, account, onBack, onAccount }: {
         </div>
       </Panel>
     </section>
+  );
+}
+
+/**
+ * What relaying matched pairs has earned. Hidden on a network that pays no gateways.
+ *
+ * Payouts normally land in In Intents on their own. Pending is only what the
+ * contract failed to pay, and is the one figure that is this device's alone:
+ * the contract keeps no per-gateway history, so the totals are network-wide.
+ */
+function RewardsPanel({ noGas, onClaimed }: { noGas: boolean; onClaimed: () => void }) {
+  const [rewards, setRewards] = useState<RewardsView | null | undefined>(undefined);
+  const [loading, setLoading] = useState(true);
+  const [claiming, setClaiming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [claimed, setClaimed] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      setRewards(await invoke<RewardsView | null>("rewards_status"));
+      setError(null);
+    } catch (failure) {
+      setError(errorCopy(failure));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void load(); }, []);
+
+  async function claim() {
+    if (claiming || !rewards?.canClaim || noGas) return;
+    setClaiming(true);
+    setError(null);
+    setClaimed(null);
+    try {
+      setClaimed(await invoke<string>("rewards_claim"));
+      onClaimed();
+    } catch (failure) {
+      setError(errorCopy(failure));
+    } finally {
+      setClaiming(false);
+      void load();
+    }
+  }
+
+  if (rewards === null) return null;
+  const token = rewards?.token ?? "";
+  return (
+    <Panel label="GATEWAY REWARDS" pad={false} action={
+      <Button size="sm" tone="ghost" disabled={loading || claiming} onClick={() => void load()} aria-label="Refresh rewards">
+        {loading ? "UPDATING…" : "REFRESH"}
+      </Button>
+    }>
+      <div className="vault-holdings vault-rewards" aria-busy={loading || claiming}>
+        <p className="vault-note vault-assets-intro">
+          Submitting a matched pair earns {rewards ? `${rewards.feePerSide} ${token}` : "a fee"} from each side. It is paid into In Intents automatically.
+        </p>
+        <div className="vault-available"><span>Pending for this device</span><span>{rewards ? `${rewards.pending} ${token}` : "—"}</span></div>
+        <p className="vault-note">{rewards?.canClaim ? "A payout did not go through. Claim it to retry." : "Nothing is waiting to be claimed."}</p>
+        <Button tone="primary" block disabled={!rewards?.canClaim || claiming || noGas} onClick={() => void claim()}>
+          {claiming ? "CLAIMING…" : "CLAIM"}
+        </Button>
+        {rewards?.canClaim && noGas && <p className="vault-warning">Add NEAR to your wallet to pay the network fee.</p>}
+        <span className="vault-caption vault-rewards-caption">ALL GATEWAYS</span>
+        <div className="vault-available"><span>Pairs settled</span><span>{rewards?.submissions ?? "—"}</span></div>
+        <div className="vault-available"><span>Fees paid</span><span>{rewards ? `${rewards.paid} ${token}` : "—"}</span></div>
+        {rewards && <p className="vault-note vault-address">{rewards.contract}</p>}
+        {error && <p className="vault-warning" role="alert">{error}</p>}
+        {claimed && <div className="vault-transfer-success" role="status"><p>Claim submitted.</p><PublicValue value={claimed} label="transaction hash" /></div>}
+      </div>
+    </Panel>
   );
 }
 

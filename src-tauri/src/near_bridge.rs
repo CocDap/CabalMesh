@@ -25,6 +25,20 @@ const RPC_ATTEMPTS: u32 = 3;
 
 const RPC_RETRY_DELAY: Duration = Duration::from_millis(500);
 
+/// `claim` pays out through `mt_transfer` (25 Tgas) and `on_paid` (10 Tgas).
+const GAS_CLAIM: u64 = 100_000_000_000_000;
+
+/// What the rewards contract reports. Amounts are in the fee token's smallest unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RewardsStatus {
+    /// Pairs settled through the contract, by every gateway.
+    pub submissions: u64,
+    /// Fees paid out, to every gateway.
+    pub paid: u128,
+    /// Payouts to this account that failed and wait for a claim.
+    pub pending: u128,
+}
+
 /// A transaction hash, as returned by the RPC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TxHash(pub String);
@@ -320,6 +334,47 @@ impl NearBridge {
             tracing::warn!(target: "cabalmesh::settlement", %rewards, %missing, "no rewards contract; submitting to the verifier");
         }
         Ok(false)
+    }
+
+    /// The rewards contract's totals, and what it still owes this account.
+    ///
+    /// `submissions` and `paid` count every gateway: the contract keeps no
+    /// per-gateway history, so only `pending` is this account's own.
+    ///
+    /// # Errors
+    ///
+    /// [`NearError::Rejected`] if no contract answers there, or any RPC failure.
+    pub async fn rewards_status(&self, rewards: &AccountId) -> Result<RewardsStatus, NearError> {
+        let stats = self.view(rewards.as_str(), "stats", &json!({})).await?;
+        let submissions = stats
+            .get("submissions")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| NearError::Rpc("stats had no submissions count".into()))?;
+        let paid = parse_amount(stats.get("paid").unwrap_or(&Value::Null))?;
+        let args = json!({ "account_id": self.account_id().as_str() });
+        let pending = parse_amount(&self.view(rewards.as_str(), "pending_of", &args).await?)?;
+        Ok(RewardsStatus { submissions, paid, pending })
+    }
+
+    /// Retries this account's failed payouts from the rewards contract.
+    ///
+    /// Reads `pending_of` first, so a claim with nothing owed costs no gas.
+    ///
+    /// # Errors
+    ///
+    /// [`NearError::Rejected`] with nothing to claim, [`NearError::AccountNotFunded`]
+    /// if this account cannot pay for gas, or any RPC failure.
+    pub async fn claim_rewards(&self, rewards: &AccountId) -> Result<TxHash, NearError> {
+        if self.rewards_status(rewards).await?.pending == 0 {
+            return Err(NearError::Rejected("nothing to claim".into()));
+        }
+        let call = FunctionCall {
+            method_name: "claim".into(),
+            args: b"{}".to_vec(),
+            gas: GAS_CLAIM,
+            deposit: 0,
+        };
+        self.send(rewards.clone(), call).await
     }
 
     /// Moves `amount` of `token` from the wallet into the verifier.
@@ -697,6 +752,47 @@ mod tests {
         let tx = STANDARD.decode(params["signed_tx_base64"].as_str().unwrap()).unwrap();
         let nonce = u64::from_le_bytes(tx[4 + 64 + 1 + 32..4 + 64 + 1 + 32 + 8].try_into().unwrap());
         assert_eq!(nonce, 42);
+    }
+
+    fn rewards_views(pending: &'static str) -> impl Fn(&str) -> Option<Value> {
+        move |view| match view {
+            "stats" => Some(json!({ "submissions": 3, "paid": "60000" })),
+            "pending_of" => Some(json!(pending)),
+            _ => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn rewards_status_reads_the_totals_and_this_accounts_pending() {
+        let rpc = MockRpc::serve(|method, params| healthy(method, params, rewards_views("20000"))).await;
+        let rewards = AccountId::try_from("rewards.test").unwrap();
+        let status = bridge(&rpc.url).rewards_status(&rewards).await.unwrap();
+        assert_eq!(status, RewardsStatus { submissions: 3, paid: 60_000, pending: 20_000 });
+
+        let calls = rpc.calls.lock().unwrap();
+        let (_, params) = calls.iter().find(|(_, p)| p["method_name"] == "pending_of").unwrap();
+        let args: Value = serde_json::from_slice(&STANDARD.decode(params["args_base64"].as_str().unwrap()).unwrap()).unwrap();
+        assert_eq!(args["account_id"], bridge(&rpc.url).account_id().as_str(), "pending is asked for this account");
+    }
+
+    #[tokio::test]
+    async fn claiming_calls_claim_on_the_rewards_contract() {
+        let rpc = MockRpc::serve(|method, params| healthy(method, params, rewards_views("20000"))).await;
+        let rewards = AccountId::try_from("rewards.test").unwrap();
+        bridge(&rpc.url).claim_rewards(&rewards).await.unwrap();
+
+        let text = sent_to(&rpc);
+        assert!(text.contains("rewards.test"));
+        assert!(text.contains("claim"));
+    }
+
+    #[tokio::test]
+    async fn claiming_with_nothing_owed_sends_nothing() {
+        let rpc = MockRpc::serve(|method, params| healthy(method, params, rewards_views("0"))).await;
+        let rewards = AccountId::try_from("rewards.test").unwrap();
+        let error = bridge(&rpc.url).claim_rewards(&rewards).await.unwrap_err();
+        assert!(matches!(error, NearError::Rejected(_)));
+        assert!(!rpc.order().iter().any(|method| method == "send_tx"), "no gas spent on an empty claim");
     }
 
     fn gateway_fee() -> GatewayFee {

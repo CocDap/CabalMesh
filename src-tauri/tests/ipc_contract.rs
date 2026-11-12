@@ -289,6 +289,8 @@ fn command_inventory() {
         "near_deposit",
         "near_withdraw",
         "near_unwrap",
+        "rewards_status",
+        "rewards_claim",
         "llm_get_settings",
         "llm_save_settings",
         "llm_set_api_key",
@@ -316,6 +318,6 @@ fn command_inventory() {
         "vault_keys",
     ];
     commands.sort_unstable();
-    assert_eq!(commands.len(), 48, "command count changed");
+    assert_eq!(commands.len(), 50, "command count changed");
     insta::assert_snapshot!(commands.join("\n"));
 }

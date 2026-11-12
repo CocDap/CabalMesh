@@ -1,0 +1,70 @@
+name: Release iOS
+
+# Manual-only build: Actions tab → "Release iOS" → Run workflow.
+#
+# Building an .ipa needs an Apple signing certificate and provisioning profile,
+# which this workflow deliberately does not use. What it does produce is the
+# simulator .app, zipped: it needs no signing and still proves the
+# Rust/Swift/Xcode half compiles. Nothing is published: the only output is the
+# workflow artifact.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build CabalMesh.app
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install the pinned Rust toolchain
+        run: rustup show
+
+      - name: Install iOS Rust targets
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Read app version
+        run: echo "APP_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_ENV"
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # Simulator builds need no certificate. They are not uploadable, but they
+      # prove the Rust/Swift/Xcode half compiles.
+      - name: Build simulator app
+        run: npm run tauri -- ios build --target aarch64-sim --ci
+
+      - name: Package simulator app
+        run: |
+          app="$(find src-tauri/gen/apple/build -type d -name '*.app' | head -n 1)"
+          if [ -z "$app" ]; then
+            echo "::error::No .app was produced under src-tauri/gen/apple/build."
+            exit 1
+          fi
+          ditto -c -k --keepParent "$app" "CabalMesh-${APP_VERSION}-ios-simulator.zip"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: CabalMesh-${{ env.APP_VERSION }}-ios
+          path: CabalMesh-${{ env.APP_VERSION }}-ios-simulator.zip
+          if-no-files-found: error
+          retention-days: 30
