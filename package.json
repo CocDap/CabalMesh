@@ -19,7 +19,10 @@
     "android:size": "bash scripts/android-size.sh",
     "relay": "cd src-tauri && cargo run --release -p cabal-relay --",
     "ios:size": "bash scripts/ios-size.sh",
-    "ble:check": "bash scripts/ble-link-check.sh"
+    "ble:check": "bash scripts/ble-link-check.sh",
+    "version": "node scripts/sync-version.ts && git add package.json package-lock.json web/package.json web/package-lock.json src-tauri/tauri.conf.json src-tauri/tauri.node2.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/gen/apple/project.yml src-tauri/gen/apple/cabalmesh_iOS/Info.plist",
+    "version:sync": "node scripts/sync-version.ts",
+    "version:check": "node scripts/sync-version.ts --check"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
