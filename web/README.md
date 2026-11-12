@@ -17,6 +17,8 @@ npm run preview   # serve dist/ on http://localhost:8765
   `Roadmap`, `Closing`; and `BleRibbon`, the animated BLE wave ribbon behind the hero scene and beside the roadmap.
 - `src/scenes/`: the drawn SVG pictures:
   - `HeroScene`: two offline phones sign locally; a gateway with internet submits the pair to NEAR Intents.
+    It is a 3D scene drawn as SVG: an orthographic camera sways and follows the mouse, and one clock replays
+    the trade every 12 seconds. Without motion it rests on the settled frame, which is also what is prerendered.
   - `StepSceneBid`, `StepSceneSign`, `StepSceneSettle`: the three steps in "A peer-to-peer trade in 3 steps".
   - `SequenceDiagram`: the "How CabalMesh Trades" sequence (the $3.70 run and its demo transaction).
 
@@ -44,7 +46,8 @@ npm run preview   # serve dist/ on http://localhost:8765
 
 The roadmap rows are copied by hand from the README checklist; update both together.
 
-Markup is static: the components hold no state, because the kit adds the behaviour (menus, motion, the pinned
+Markup is static: the components hold no state (except `HeroScene`, which runs its own frame clock), because
+the kit adds the behaviour (menus, motion, the pinned
 chapters, the terminal and code replays) to the DOM after React renders it. Keep the class names and `data-*`
 attributes the kit reads.
 
