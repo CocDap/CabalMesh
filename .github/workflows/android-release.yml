@@ -1,41 +1,21 @@
 name: Release Android
 
-# Manual-only, in the same shape as the SciKMS release workflows: Actions tab →
-# "Release Android" → Run workflow, then choose where the build goes.
+# Manual-only build: Actions tab → "Release Android" → Run workflow.
 #
-# Produces a Play upload bundle and a universal APK for sideloading. Publishing
-# (draft / release / nightly) requires the signing keystore; artifact-only also
-# works without it, but the output is unsigned. See docs/android-release.md.
-#
-# Required secrets for signed builds:
-#   ANDROID_KEY_BASE64            base64 of the release .jks / .p12
-#   ANDROID_KEYSTORE_PASSWORD
-#   ANDROID_KEY_ALIAS
-#   ANDROID_KEY_PASSWORD
+# Produces an unsigned Play upload bundle and a universal APK for sideloading.
+# Nothing is published: the only output is the workflow artifact. The build is
+# unsigned on purpose, so it cannot be uploaded to Play as-is. See
+# docs/android-release.md.
 on:
   workflow_dispatch:
     inputs:
-      release_mode:
-        description: "Where to publish the build"
-        required: true
-        default: "artifact-only"
-        type: choice
-        options:
-          - artifact-only      # just upload as Action artifact, no Release entry
-          - draft              # create a draft Release at tag (manual publish later)
-          - release            # publish a Release at the chosen tag
-          - nightly            # publish/overwrite the rolling 'nightly' Release
-      version_tag:
-        description: "Tag for draft / release modes (e.g. v0.1.0). Ignored for artifact-only / nightly."
-        required: false
-        default: ""
       version_code:
         description: "Android versionCode. Defaults to the workflow run number."
         required: false
         default: ""
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -44,16 +24,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Validate inputs
-        if: inputs.release_mode == 'draft' || inputs.release_mode == 'release'
-        env:
-          TAG: ${{ inputs.version_tag }}
-        run: |
-          if [ -z "$TAG" ]; then
-            echo "::error::version_tag is required for draft and release modes."
-            exit 1
-          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -112,46 +82,6 @@ jobs:
       - name: Read app version
         run: echo "APP_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_ENV"
 
-      # Committed Gradle reads storeFile/storePassword/keyAlias/keyPassword from
-      # src-tauri/gen/android/keystore.properties, and leaves the release
-      # unsigned when the file is absent rather than falling back to the debug
-      # key. Write the file only when the keystore secret exists.
-      - name: Configure Android signing
-        env:
-          KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          if [ -n "$KEY_BASE64" ]; then
-            printf '%s' "$KEY_BASE64" | base64 -d > "$RUNNER_TEMP/cabalmesh-release.jks"
-            cd src-tauri/gen/android
-            {
-              echo "storeFile=$RUNNER_TEMP/cabalmesh-release.jks"
-              echo "storePassword=$STORE_PASSWORD"
-              echo "keyAlias=$KEY_ALIAS"
-              echo "keyPassword=$KEY_PASSWORD"
-            } > keystore.properties
-            echo "ANDROID_SIGNED=true" >> "$GITHUB_ENV"
-          else
-            echo "ANDROID_SIGNED=false" >> "$GITHUB_ENV"
-          fi
-
-      - name: Require signing to publish
-        if: inputs.release_mode != 'artifact-only' && env.ANDROID_SIGNED != 'true'
-        run: |
-          echo "::error::ANDROID_KEY_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD are required to publish an Android build."
-          exit 1
-
-      - name: Note unsigned build
-        if: env.ANDROID_SIGNED != 'true'
-        run: |
-          {
-            echo "### Unsigned Android build"
-            echo
-            echo "No keystore secrets were supplied, so the AAB and APK are unsigned and cannot be uploaded to Play."
-          } >> "$GITHUB_STEP_SUMMARY"
-
       # autoIncrementVersionCode is on in tauri.conf.json, but its counter lives
       # in the gitignored app/tauri.properties, so a fresh checkout would always
       # produce versionCode 1. Turn it off for this build and set the code
@@ -163,7 +93,7 @@ jobs:
           npm run tauri -- android build --aab --apk --ci \
             --config "{\"bundle\":{\"android\":{\"autoIncrementVersionCode\":false,\"versionCode\":$VERSION_CODE}}}"
 
-      - name: Upload build artifact (always)
+      - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
           name: CabalMesh-${{ env.APP_VERSION }}-android
@@ -172,29 +102,3 @@ jobs:
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 30
-
-      - name: Publish to GitHub Release (draft / release)
-        if: inputs.release_mode == 'draft' || inputs.release_mode == 'release'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ inputs.version_tag }}
-          name: ${{ inputs.version_tag }}
-          draft: ${{ inputs.release_mode == 'draft' }}
-          files: |
-            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish to nightly Release
-        if: inputs.release_mode == 'nightly'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: nightly
-          name: Nightly builds
-          prerelease: true
-          files: |
-            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
