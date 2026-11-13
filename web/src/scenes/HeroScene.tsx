@@ -3,19 +3,20 @@ import { useEffect, useRef, useState } from 'react';
 /**
  * The hero scene in real 3D, drawn as SVG: two offline iPhones in front, the gateway router behind them and the
  * NEAR block floating at the back. Everything is placed in world space (x runs down-right, y down-left, z up)
- * and projected by an orthographic camera that sways and follows the mouse; flat content (a screen, a label on
- * a face) is laid on its plane with an affine matrix. One clock replays the trade every 12 seconds: the agents
- * bid over Bluetooth, both phones sign, the signed halves fly to the gateway, the pair goes to NEAR, and the
- * proof comes back. Without motion (the prerender, reduced motion) the scene rests on the settled frame.
+ * and projected by a fixed isometric camera; flat content (a screen, a label on
+ * a face) is laid on its plane with an affine matrix. The solids stand still; only the flow moves. One clock
+ * replays the trade every 12 seconds: the agents bid over Bluetooth, both phones sign, the signed halves fly to
+ * the gateway, the pair goes to NEAR, and the proof comes back. Without motion (the prerender, reduced motion)
+ * the scene rests on the settled frame.
  */
 type V = [number, number, number];
 type Pt = [number, number];
 type Tone = 'w' | 'g' | 'c';
 
-const K = 1.2247; // isometric scale: a world unit along z is one pixel at the resting pitch
+const K = 1.2247; // isometric scale: a world unit along z is one pixel
 const RAD = Math.PI / 180;
 const PITCH0 = Math.asin(1 / Math.sqrt(3)) / RAD;
-/** The camera turns about the phones' feet, which stay at this point of the 480x620 canvas. */
+/** The phones' feet sit at this point of the 480x620 canvas. */
 const PIVOT: V = [28, 28, 0];
 const PIVOT_AT: Pt = [240, 546];
 const LOOP = 12;
@@ -30,9 +31,9 @@ const ease = (s: number) => s * s * (3 - 2 * s);
 const mix = (a: V, b: V, s: number): V => [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s, a[2] + (b[2] - a[2]) * s];
 const pts = (...p: Pt[]) => p.map((q) => q.join(',')).join(' ');
 
-function camera(yaw: number, pitch: number) {
-  const th = (45 + yaw) * RAD;
-  const ph = (PITCH0 + pitch) * RAD;
+function camera() {
+  const th = 45 * RAD;
+  const ph = PITCH0 * RAD;
   const ct = K * Math.cos(th);
   const st = K * Math.sin(th);
   const sp = Math.sin(ph);
@@ -55,6 +56,7 @@ function camera(yaw: number, pitch: number) {
   };
 }
 type Cam = ReturnType<typeof camera>;
+const CAM = camera();
 
 /** An axis-aligned box drawn as its three visible faces; glow tints the top face. */
 function Box({ c, at, w, d, h, glow }: { c: Cam; at: V; w: number; d: number; h: number; glow?: [Tone, number] }) {
@@ -151,13 +153,13 @@ const B_UP: [V, V] = [[108, -4.5, 226], [-172, -240, 12]];
 const B_DOWN: [V, V] = [[-172, -228, 12], [108, 7.5, 226]];
 const N_UP: [V, V] = [[-250.6, -241.4, 18], [-362.6, -353.4, 0]];
 const N_DOWN: [V, V] = [[-353.4, -362.6, 0], [-241.4, -250.6, 18]];
-/* the middle of each phone's top edge: its two labels hang off it, clear of the links at any angle */
+/* the middle of each phone's top edge: its two labels hang off it, clear of the links */
 const TOP_A: V = [0, 108, 212];
 const TOP_B: V = [108, 0, 212];
 const NEAR = -466;
 
-type Frame = { t: number; yaw: number; pitch: number; live: boolean };
-const REST: Frame = { t: 11, yaw: 0, pitch: 0, live: false };
+type Frame = { t: number; live: boolean };
+const REST: Frame = { t: 11, live: false };
 
 export default function HeroScene() {
   const ref = useRef<SVGSVGElement>(null);
@@ -166,20 +168,13 @@ export default function HeroScene() {
   useEffect(() => {
     const svg = ref.current;
     if (!svg) return;
-    const host = svg.parentElement;
     const motion = window.matchMedia('(prefers-reduced-motion: no-preference)');
     let raf = 0;
     let start = 0;
     let seen = true;
-    let [px, py, ex, ey] = [0, 0, 0, 0];
     const tick = (now: number) => {
       if (!start) start = now;
-      const s = (now - start) / 1000;
-      ex += (px - ex) * 0.05;
-      ey += (py - ey) * 0.05;
-      const yaw = 5 * Math.sin((s * 2 * Math.PI) / 20) + 4 * ex;
-      setFrame({ t: s % LOOP, yaw, pitch: 1.5 * ey, live: true });
-      host?.style.setProperty('--hs-yaw', `${yaw.toFixed(2)}deg`);
+      setFrame({ t: ((now - start) / 1000) % LOOP, live: true });
       raf = requestAnimationFrame(tick);
     };
     const run = () => {
@@ -188,13 +183,7 @@ export default function HeroScene() {
         raf = requestAnimationFrame(tick);
       } else if (!motion.matches) {
         setFrame(REST);
-        host?.style.removeProperty('--hs-yaw');
       }
-    };
-    const onMove = (e: PointerEvent) => {
-      if (e.pointerType !== 'mouse') return;
-      px = (e.clientX / window.innerWidth) * 2 - 1;
-      py = (e.clientY / window.innerHeight) * 2 - 1;
     };
     const io = new IntersectionObserver(([entry]) => {
       seen = entry.isIntersecting;
@@ -202,19 +191,16 @@ export default function HeroScene() {
     });
     io.observe(svg);
     motion.addEventListener('change', run);
-    window.addEventListener('pointermove', onMove, { passive: true });
     run();
     return () => {
       cancelAnimationFrame(raf);
       io.disconnect();
       motion.removeEventListener('change', run);
-      window.removeEventListener('pointermove', onMove);
-      host?.style.removeProperty('--hs-yaw');
     };
   }, []);
 
-  const { t, yaw, pitch, live } = frame;
-  const c = camera(yaw, pitch);
+  const { t, live } = frame;
+  const c = CAM;
   const at = (p: V, dx = 0, dy = 0) => {
     const q = c.P(p);
     return { x: r1(q[0] + dx), y: r1(q[1] + dy) };
@@ -235,7 +221,7 @@ export default function HeroScene() {
   const flash = (signed: number) => (!live || t < signed ? 0 : t < DONE ? 1 - seg(t, signed, signed + 0.5) : 1 - seg(t, DONE, DONE + 0.6));
 
   const settle = live && t >= SETTLE[0] ? seg(t, SETTLE[0], SETTLE[1]) : -1;
-  const nearZ = live ? 6 + 3 * Math.sin((t * 2 * Math.PI) / 4) + (settle >= 0 ? 9 * Math.sin(Math.PI * settle) : 0) : 6;
+  const nearZ = 6;
   const nearTop: V = [NEAR, NEAR, nearZ + 30];
   const routerGlow: [Tone, number] = !live
     ? ['c', 0]

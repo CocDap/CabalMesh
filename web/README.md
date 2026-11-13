@@ -14,11 +14,14 @@ npm run preview   # serve dist/ on http://localhost:8765
 
 - `src/App.tsx`: the page, section by section.
 - `src/sections/`: one component per section: `Nav`, `Hero`, `AppFrame`, `HowItWorks`, `Sequence`, `WhyNear`,
-  `Roadmap`, `Closing`; and `BleRibbon`, the animated BLE wave ribbon behind the hero scene and beside the roadmap.
+  `Roadmap`, `Closing`; `BleRibbon`, the animated BLE wave ribbon behind the hero scene and beside the roadmap;
+  and `DownloadButton`, the hero's "Download free for …" split button with the list of platforms.
+- `src/download.ts`: the builds in the latest GitHub release (file, type, size per platform) and the visitor's
+  platform. The download button and the footer read it; update it with each release.
 - `src/scenes/`: the drawn SVG pictures:
   - `HeroScene`: two offline phones sign locally; a gateway with internet submits the pair to NEAR Intents.
-    It is a 3D scene drawn as SVG: an orthographic camera sways and follows the mouse, and one clock replays
-    the trade every 12 seconds. Without motion it rests on the settled frame, which is also what is prerendered.
+    It is a 3D scene drawn as SVG with a fixed isometric camera: NEAR, the gateway and the phones stand still,
+    and one clock replays the trade's flow every 12 seconds. Without motion it rests on the settled frame, which is also what is prerendered.
   - `StepSceneBid`, `StepSceneSign`, `StepSceneSettle`: the three steps in "A peer-to-peer trade in 3 steps".
   - `SequenceDiagram`: the "How CabalMesh Trades" sequence (the $3.70 run and its demo transaction).
 

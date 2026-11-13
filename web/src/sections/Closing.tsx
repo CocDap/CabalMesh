@@ -1,4 +1,6 @@
-/** The footer links. */
+import { BUILDS, RELEASE } from '../download';
+
+/** The footer links, with one link per build of the latest release. */
 export default function Closing() {
   return (
     <footer className="footer closing footer--dark ground-inverse" id="contact">
@@ -12,7 +14,7 @@ export default function Closing() {
               </a>
               <p className="footer__lede">Phones that trade over a mesh and settle on NEAR.</p>
             </div>
-            <div className="span-2 start-7 footer__col">
+            <div className="span-2 start-5 footer__col">
               <h3>A trade</h3>
               <ul>
                 <li>
@@ -42,6 +44,19 @@ export default function Closing() {
               <ul>
                 <li>
                   <a href="https://github.com/CocDap/CabalMesh">GitHub</a>
+                </li>
+              </ul>
+            </div>
+            <div className="span-2 footer__col">
+              <h3>Download</h3>
+              <ul>
+                {BUILDS.map((b) => (
+                  <li key={b.id}>
+                    <a href={b.href}>{b.name}</a>
+                  </li>
+                ))}
+                <li>
+                  <a href={RELEASE.page}>{`Release ${RELEASE.version}`}</a>
                 </li>
               </ul>
             </div>
