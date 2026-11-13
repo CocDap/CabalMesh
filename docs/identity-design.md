@@ -2,45 +2,87 @@
 
 > **2026-11-05:** written when the app settled on Avalanche. NEAR is now the only chain, and `contracts/`, alloy and `blockchain_bridge.rs` are gone (`identity.rs` and `near_bridge.rs` replaced it). Key handling below applies to the ed25519 NEAR key; an old EVM key is not kept. Kept as a historical record; see `docs/product-status.md` for what is true today.
 
-**Status: partially built.** Written 2026-08-10; updated 2026-08-13 once the
-first two layers below actually shipped. What follows was written when none
-of it existed, and is kept as the design rationale — the parts now built
-match it, the parts that don't are noted inline.
+**Status: built; native paths unverified on a device.** Written 2026-08-10,
+updated 2026-08-13, and again 2026-11-13 after an audit found several claims
+below did not match the code. What follows is kept as the design rationale;
+where the built version differs, it says so inline.
 
-**Built and tested (including over a real, if loopback, transport — not just
-in-memory):**
-- **Passphrase unlock** (decision 1). `cabal_vault::PassphraseKeyProvider`
-  (Argon2id), opt-in, off by default. `VAULT → KEYS → SECURITY` in the app.
-- **Export / import / restore**, closing the "no way to export the key" gap
-  this doc opened with. `VAULT → KEYS → ADVANCED`.
-- **Guardian mesh unlock** (decisions 2–3's mechanism, minus the delay —
-  see below): enrollment (request → accept → sealed share), a broadcast
-  unlock request using unlinkable per-guardian tags rather than durable
-  peer identifiers (see "Mesh unlock" below — the design needed one addition
-  the original text didn't anticipate, spelled out where it's relevant), and
-  an unlock reply gated on an explicit human approval tap, exactly as this
-  doc specifies. `cabal_guardian` (crypto), `src/guardian.rs` (persistence +
-  protocol), `src/guardian_actor.rs` (BLE wiring), `VAULT → KEYS →
-  GUARDIANS`.
+**Built and tested (unit tests plus a real, if loopback, BLE transport):**
+- **Passphrase unlock** (decision 1). Argon2id with the documented
+  m=64 MiB, t=3, p=1 — now actually; until 2026-11-13 the code used the
+  crate defaults (19 MiB, t=2) with a bare-hex salt. Parameters live in a
+  JSON envelope beside the vault; old salts still open and are re-encrypted
+  under current parameters on the next unlock. Tests pin the constants and
+  a per-derivation time ceiling.
+- **Retries**: wrong attempts counted beside the vault, exponential capped
+  backoff after 3 free tries (`src/unlock_attempts.rs`). Until 2026-11-13
+  this section described something that did not exist.
+- **Export / import / restore**. `VAULT → KEYS → ADVANCED`.
+- **Guardian mesh unlock** (decision 2): enrollment, unlinkable broadcast
+  tags, human approval tap, and `UNLOCK WITH GUARDIANS` on the lock screen.
+  Guardians hold shares of a stable **recovery key RK**, not of the vault
+  key: the vault key is wrapped under RK on the owner's device. Before this,
+  toggling the passphrase changed the vault key and silently orphaned every
+  share.
+- **Restore onto a new device** — which could not work before: guardians
+  held shares of a key whose vault file was lost with the device, and a new
+  device could not tag a request. Now enrollment issues a **restore code**
+  (Crockford base32, checksummed) and guardians hold the vault's contents
+  wrapped under `H(RK, code)`. See "Restore" below.
+- **24h delay with veto** (decision 3), enforced by guardians, waived when
+  the owner last reported a vault below dust (0.05 NEAR, no tokens). Pending
+  restores are announced; the original device shows `RESTORE IN PROGRESS`
+  and can cancel. System notifications via `tauri-plugin-notification`.
+- **Guardian storage follows `SECURITY`.** Shares held *for others* are
+  encrypted under a subkey of the vault key, so they lock and re-key with the
+  passphrase. The owner side stays file-key protected on purpose: mesh unlock
+  must work while the vault is locked.
+- **Screens**: `CHOOSE GUARDIANS` (fixed 3-of-5), `DISTRIBUTING SHARES` with
+  live per-guardian progress, `MESH UNLOCK` n/K, `RESTORE FROM GUARDIANS`
+  with countdown, a restore-vs-unlock aware approval prompt, and a
+  risk-driven backup prompt on Home once the vault holds value.
+- **Mobile PIN** (decision 1's other half) — see the revised decision 1.
 
-**Not built — stated plainly rather than left ambiguous:**
-- The **24–48h recovery delay with a veto notification** (decision 3).
-  Needs a background task and a local/push notification that survive the
-  app being closed — real platform integration on iOS/Android that cannot
-  be built or verified without a physical device.
-- The **mobile PIN path** (decision 1's other half). The native key-store
-  plugin (ticket 21) is now wired on iOS and Android — see "Decisions" below
-  — but it releases the stored key on request, with no retry counter behind
-  it yet; a PIN is not safe to ship until that counter exists, so passphrase
-  stays the only unlock factor everywhere for now.
-- The **five mock-up screens below are not pixel-matched.** The app has one
-  working screen per flow (enroll, approve, restore), not yet the
-  `CHOOSE GUARDIANS` / `DISTRIBUTING SHARES` / live per-guardian progress
-  presentation this doc sketches — those were left as a UI pass, not a
-  functional gap.
-- Guardian storage does not yet switch protection together with
-  `SECURITY`'s passphrase toggle; it is file-key-protected regardless of
-  that setting today.
+**Not verified, stated plainly:**
+- The iOS keychain-with-passcode and Android `AUTH_DEVICE_CREDENTIAL` code,
+  notifications, and background behaviour compile on the host only; no
+  Android/iOS target was cross-compiled and nothing ran on a device.
+- Notifications fire while the app process is alive. Nothing keeps it alive
+  when the OS suspends it; a guardian's pending-restore announcements and
+  the original device's veto only happen while each app is running.
+- The veto travels **over the mesh only**. There is no server, so an original
+  device that is not within mesh reach of a guardian holding the restore
+  during the 24h never hears about it — narrower than "alive somewhere with a
+  network connection" below.
+- Candidates are ordered by hop count, not relay count: peer ids reset every
+  session by design, so there is no durable relay history to count.
+- Layer 2 for the *passphrase* path (`src-tauri/src/device_binding.rs`) is
+  not compiled into the app — it is not declared as a module. Earlier
+  versions of this doc said the key store was "wired on iOS and Android";
+  it was not, and the keystore plugin was not even registered. The plugin is
+  now registered, for the PIN path only.
+
+### Restore (as built)
+
+```
+enrollment:  RK random → Shamir(3,5) → shares
+             code  = random 32 B, shown once      (rotated on re-enrollment)
+             guardian gets: share, H(code), owner_auth_key,
+                            AEAD_{H(RK,code)}(vault contents)
+new device:  code → broadcast RestoreRequest{nonce, H(H(code),nonce), reply_pk}
+guardian:    human approves → held 24h (0 if last reported empty),
+             announces RestorePending tagged with owner_auth_key
+old device:  recognises the tag → RESTORE IN PROGRESS → RestoreCancel (MAC)
+after 24h:   guardian releases share + backup sealed to reply_pk
+new device:  K shares → RK → open newest backup → new vault under a fresh
+             file key; the replaced vault is kept as vault.enc.pre-restore-*
+```
+
+The code alone opens nothing; K guardians without the code cannot find or
+open the backup; a single guardian cannot brute-force a weak passphrase from
+the backup, because the backup is not under the passphrase. The owner's
+device refreshes guardians' backups (and the empty/has-value flag) every 30
+minutes while unlocked.
 
 ## Where things stand
 
@@ -112,7 +154,7 @@ Platform constraints that force layer 1 to exist:
 
 | Platform | Hardware-counted retry limit | Consequence |
 |---|---|---|
-| iOS / Android | yes (Secure Enclave / StrongBox) — wired via the native keystore plugin, see decision 1 below | a 6-digit PIN is sufficient once the plugin also enforces a retry counter |
+| iOS / Android | for the **device passcode** only (Secure Enclave / Gatekeeper) — no store counts an app-defined PIN | a 6-digit PIN is defensible only when its key also needs a secret the OS releases after the device passcode — see decision 1 |
 | macOS / Windows / Linux | no key store is wired for desktop | **passphrase required** — a PIN is brute-forceable once the file is copied |
 
 Note the conditional. This table describes what each platform *offers*, and the
@@ -384,25 +426,29 @@ worthless once the file is copied — the attacker counts on their own machine,
 where nothing refuses. So the factor is chosen by what is wired, not by what
 the platform could in principle provide:
 
-| Platform | Hardware retry counter wired today | Layer-1 factor |
+| Platform | Presence-gated secret wired | Layer-1 factor |
 |---|---|---|
 | macOS | no | passphrase |
 | Windows | no | passphrase |
 | Linux | none exists | passphrase |
-| iOS | no | passphrase |
-| Android | no | passphrase |
+| iOS | yes — keychain, `kSecAccessControlDevicePasscode` (unverified on device) | PIN or passphrase |
+| Android 11+ | yes — Keystore, `AUTH_DEVICE_CREDENTIAL` (unverified on device) | PIN or passphrase |
+| Android < 11 | no | passphrase |
 
-Note what that column does and does not say. A **key store** is now wired on
-Apple platforms and Android — see layer 2 — but a key store is not a retry
-counter. The stored key is released without asking the user for anything,
-which is what makes it exfiltration resistance rather than access control, and
-therefore what leaves the entropy of layer 1 carrying the whole load. A PIN
-becomes defensible on a platform the day that platform's store is asked for
-*user presence*, not the day it is merely used.
+**Revised 2026-11-13.** The original premise — that the Secure Enclave or
+StrongBox can enforce a retry counter on the app's PIN — is false: they count
+attempts at the *device* passcode, never at a secret an app defines. So the
+PIN path is: vault key = `H(Argon2id(PIN) ‖ presence secret)`, where the
+presence secret leaves the key store only after the OS verifies the device
+passcode (never biometrics), under the OS's hardware throttling. This is the
+condition the original decision set: a PIN becomes defensible "the day that
+platform's store is asked for *user presence*".
 
-A 6-digit PIN becomes available on a platform the day that platform's store is
-connected with a counter, and not before. That is a per-platform unlock of a
-feature, not a global switch.
+What it buys: a copied vault file or a stolen *locked* phone gets nothing from
+the PIN alone. What it does not: someone who knows the device passcode and
+holds the phone can guess the PIN at Argon2id speed, slowed only by the
+software backoff. Against that person a PIN is a speed bump; a passphrase is
+the right choice there, and stays available on every platform.
 
 ### Key derivation
 
