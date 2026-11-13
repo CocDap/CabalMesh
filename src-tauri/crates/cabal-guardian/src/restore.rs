@@ -77,12 +77,15 @@ impl RestoreSecret {
         self.0
     }
 
-    /// The code shown to the person: 32 bytes plus a one-byte checksum, in
-    /// Crockford base32, grouped in fours (`XXXX-XXXX-…`, 53 characters).
+    /// The code shown to the person: 32 bytes plus a two-byte checksum, in
+    /// Crockford base32, grouped in fours (`XXXX-XXXX-…`, 55 characters).
+    /// Two bytes, so a typo slips through 1 time in 65 536 rather than 1 in
+    /// 256 — a slipped typo is not a security problem (no guardian answers),
+    /// but it is a baffling one for the person typing.
     #[must_use]
     pub fn to_code(&self) -> String {
         let mut data = self.0.to_vec();
-        data.push(checksum(&self.0));
+        data.extend_from_slice(&checksum(&self.0));
         let encoded = base32_encode(&data);
         encoded
             .as_bytes()
@@ -109,12 +112,12 @@ impl RestoreSecret {
             })
             .collect();
         let bytes = base32_decode(&cleaned).ok_or(RestoreError::BadCode)?;
-        if bytes.len() != 33 {
+        if bytes.len() != 34 {
             return Err(RestoreError::BadCode);
         }
         let mut secret = [0_u8; 32];
         secret.copy_from_slice(&bytes[..32]);
-        if checksum(&secret) != bytes[32] {
+        if checksum(&secret) != bytes[32..] {
             return Err(RestoreError::BadCode);
         }
         Ok(Self(secret))
@@ -229,8 +232,9 @@ fn truncate(digest: [u8; 32]) -> [u8; TAG_LEN] {
     tag
 }
 
-fn checksum(secret: &[u8; 32]) -> u8 {
-    hash(b"cabalmesh/restore-code-check/v1", &[secret])[0]
+fn checksum(secret: &[u8; 32]) -> [u8; 2] {
+    let digest = hash(b"cabalmesh/restore-code-check/v1", &[secret]);
+    [digest[0], digest[1]]
 }
 
 fn base32_encode(data: &[u8]) -> String {
@@ -279,7 +283,7 @@ mod tests {
     fn a_code_round_trips_and_tolerates_how_people_type() {
         let secret = RestoreSecret::generate();
         let code = secret.to_code();
-        assert_eq!(code.len(), 53 + 13, "53 characters in groups of four");
+        assert_eq!(code.len(), 55 + 13, "55 characters in groups of four");
         assert_eq!(RestoreSecret::from_code(&code).unwrap(), secret);
 
         let sloppy = code.to_lowercase().replace('-', " ").replace('1', "l").replace('0', "o");
@@ -287,12 +291,29 @@ mod tests {
     }
 
     #[test]
-    fn a_single_mistyped_character_is_caught() {
-        let code = RestoreSecret::generate().to_code();
-        let mut chars: Vec<char> = code.chars().collect();
-        chars[5] = if chars[5] == 'A' { 'B' } else { 'A' };
-        let typo: String = chars.into_iter().collect();
-        assert_eq!(RestoreSecret::from_code(&typo), Err(RestoreError::BadCode));
+    fn mistyped_characters_are_caught() {
+        // Deterministic: every single-character substitution in every
+        // position of fixed codes. A 2-byte checksum lets ~1 in 65 536
+        // through, so this many trials should catch essentially all.
+        let mut caught = 0_u32;
+        let mut tried = 0_u32;
+        for seed in 0..8_u8 {
+            let code = RestoreSecret::from_bytes([seed; 32]).to_code();
+            let chars: Vec<char> = code.chars().collect();
+            for (i, &c) in chars.iter().enumerate() {
+                if c == '-' {
+                    continue;
+                }
+                let replacement = if c == 'A' { 'B' } else { 'A' };
+                let mut typo = chars.clone();
+                typo[i] = replacement;
+                tried += 1;
+                if RestoreSecret::from_code(&typo.into_iter().collect::<String>()).is_err() {
+                    caught += 1;
+                }
+            }
+        }
+        assert_eq!(caught, tried, "every one of {tried} single-character typos should be rejected");
     }
 
     #[test]
