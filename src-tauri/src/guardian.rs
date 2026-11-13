@@ -21,17 +21,29 @@
 //!
 //! One encrypted document, holding both roles a device can play — the
 //! guardians *it* has enrolled, and the shares it holds *for others* — since
-//! a real device plausibly does both. Protected the same way the identity
-//! vault is by default: a file-backed key. It does not yet participate in
-//! `SECURITY`'s passphrase switch (`IdentityStore::enable_passphrase`);
-//! wiring the two together is follow-up work, not silently assumed here.
+//! a real device plausibly does both — split across two files, because the
+//! two roles need different protection:
+//!
+//! - `guardian.enc` — the *owner* side (this device's recovery key and the
+//!   guardians it enrolled). File-key protected regardless of `SECURITY`'s
+//!   passphrase switch, deliberately: mesh unlock is a way to *open* a
+//!   locked vault, so what it needs has to be readable before the vault is.
+//!   What it exposes to someone holding the file is guardian public keys and
+//!   a key that opens replies only guardians, by a human tap, would send.
+//! - `guardian_held.enc` — shares this device holds *for other people*.
+//!   Encrypted under a subkey of the identity vault's own key
+//!   ([`DataKey::derive`]), so it follows the passphrase switch exactly: while
+//!   the vault is locked these shares are unreadable and this device answers
+//!   no one; re-keyed whenever the vault key changes
+//!   ([`GuardianService::attach_vault_key`]).
 
 use cabal_guardian::protocol::{
     recognition_tag, EnrollAccept, EnrollPayload, EnrollRequest, GuardianMessage, UnlockReplyPayload, UnlockRequest,
 };
 use cabal_guardian::sealed::{self, GuardianPublicKey, GuardianSecretKey, Sealed};
 use cabal_guardian::{self as shamir, Share};
-use cabal_vault::{DataKey, Vault};
+use cabal_vault::{DataKey, StaticKeyProvider, Vault};
+use std::path::PathBuf;
 use aes_gcm::aead::{rand_core::RngCore, OsRng};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -98,6 +110,8 @@ pub enum GuardianServiceError {
     Malformed,
     #[error("no recovery key exists yet — enroll guardians first")]
     NotEnrolled,
+    #[error("the vault is locked — shares held for others are unreadable until it opens")]
+    Locked,
     #[error("need at least two guardians, and no more than 255")]
     InvalidGuardianCount,
 }
@@ -112,12 +126,25 @@ impl From<serde_json::Error> for GuardianServiceError {
 /// dependency — sending what this produces, and feeding it what arrives, is
 /// the caller's job (see the `mod actor` below).
 pub struct GuardianService {
+    /// `guardian.enc`: the owner side. See the module docs for why this one
+    /// stays file-key protected.
     vault: Vault<crate::vault_key::FileKeyProvider>,
+    /// In memory, both roles. `doc.held` is persisted to `held_vault`, never
+    /// to `vault` — except in a store written before the split, which
+    /// [`Self::attach_vault_key`] migrates.
     doc: GuardianDocument,
+    held_path: PathBuf,
+    /// `None` until the identity vault's key is attached — i.e. while the
+    /// vault is locked.
+    held_vault: Option<Vault<StaticKeyProvider>>,
 }
 
+/// Label for the held-shares subkey. Changing it orphans every held share.
+const HELD_SUBKEY_LABEL: &str = "guardian-held";
+
 impl GuardianService {
-    /// Opens (or creates) the guardian store under `app_dir`.
+    /// Opens (or creates) the guardian store under `app_dir`. Shares held for
+    /// others stay unreadable until [`Self::attach_vault_key`].
     #[must_use]
     pub fn open(app_dir: &std::path::Path) -> Self {
         let vault = Vault::new(
@@ -125,11 +152,72 @@ impl GuardianService {
             crate::vault_key::platform_provider(app_dir.join("guardian.key")),
         );
         let doc = if vault.exists() { vault.load().unwrap_or_default() } else { GuardianDocument::default() };
-        Self { vault, doc }
+        Self { vault, doc, held_path: app_dir.join("guardian_held.enc"), held_vault: None }
     }
 
-    fn save(&self) -> Result<(), GuardianServiceError> {
-        self.vault.save(&self.doc)?;
+    /// Supplies the identity vault's current key: opens the held-shares
+    /// store under it, or — if it was already open under a previous key —
+    /// re-encrypts it under this one. Call after every unlock and after
+    /// anything that changes the vault key (passphrase on/off, restore).
+    ///
+    /// # Errors
+    ///
+    /// The held store exists but does not open under `vault_key` while
+    /// nothing is open in memory to re-key from, or a write failed. On error
+    /// the previous state is left as it was.
+    pub fn attach_vault_key(&mut self, vault_key: &DataKey) -> Result<(), GuardianServiceError> {
+        let next = Vault::new(self.held_path.clone(), StaticKeyProvider::new(vault_key.derive(HELD_SUBKEY_LABEL)));
+
+        if self.held_vault.is_some() {
+            // Already readable: what is in memory is authoritative.
+            next.save(&self.doc.held)?;
+            self.held_vault = Some(next);
+            return Ok(());
+        }
+
+        let legacy = std::mem::take(&mut self.doc.held);
+        let mut held: HeldState = if next.exists() {
+            match next.load() {
+                Ok(held) => held,
+                Err(error) => {
+                    self.doc.held = legacy;
+                    return Err(error.into());
+                }
+            }
+        } else {
+            HeldState::default()
+        };
+        let migrating = legacy.secret_key.is_some() || !legacy.held.is_empty();
+        if migrating {
+            if held.secret_key.is_none() {
+                held.secret_key = legacy.secret_key;
+            }
+            held.held.extend(legacy.held);
+        }
+        next.save(&held)?;
+        self.doc.held = held;
+        self.held_vault = Some(next);
+        if migrating {
+            // Only now that the shares are safely in the new file.
+            self.save_owner()?;
+        }
+        Ok(())
+    }
+
+    /// Whether shares held for others are readable this session.
+    #[must_use]
+    pub fn is_held_unlocked(&self) -> bool {
+        self.held_vault.is_some()
+    }
+
+    fn save_owner(&self) -> Result<(), GuardianServiceError> {
+        let owner_only = GuardianDocument { owner: self.doc.owner.clone(), held: HeldState::default() };
+        self.vault.save(&owner_only)?;
+        Ok(())
+    }
+
+    fn save_held(&self) -> Result<(), GuardianServiceError> {
+        self.held_vault.as_ref().ok_or(GuardianServiceError::Locked)?.save(&self.doc.held)?;
         Ok(())
     }
 
@@ -142,7 +230,7 @@ impl GuardianService {
         if self.doc.owner.recovery_secret_key.is_none() {
             let key = GuardianSecretKey::generate();
             self.doc.owner.recovery_secret_key = Some(key.to_bytes());
-            self.save()?;
+            self.save_owner()?;
         }
         Ok(GuardianSecretKey::from_bytes(self.doc.owner.recovery_secret_key.expect("just set")))
     }
@@ -193,7 +281,7 @@ impl GuardianService {
             .map(|g| GuardianRecord { public_key: g.to_bytes(), enrolled_at: Utc::now() })
             .collect();
         self.doc.owner.threshold = k;
-        self.save()?;
+        self.save_owner()?;
 
         Ok(messages)
     }
@@ -261,10 +349,13 @@ impl GuardianService {
     /// This device's own guardian key pair, generating one the first time it
     /// is asked to hold a share.
     fn guardian_key(&mut self) -> Result<GuardianSecretKey, GuardianServiceError> {
+        if self.held_vault.is_none() {
+            return Err(GuardianServiceError::Locked);
+        }
         if self.doc.held.secret_key.is_none() {
             let key = GuardianSecretKey::generate();
             self.doc.held.secret_key = Some(key.to_bytes());
-            self.save()?;
+            self.save_held()?;
         }
         Ok(GuardianSecretKey::from_bytes(self.doc.held.secret_key.expect("just set")))
     }
@@ -295,7 +386,7 @@ impl GuardianService {
             share: payload.share,
             enrolled_at: Utc::now(),
         });
-        self.save()?;
+        self.save_held()?;
         Ok(())
     }
 
@@ -316,6 +407,9 @@ impl GuardianService {
     /// someone else is harmless ciphertext to everyone but them.
     #[must_use]
     pub fn guardian_match_unlock_request(&self, request: &UnlockRequest) -> Vec<GuardianMessage> {
+        if self.held_vault.is_none() {
+            return Vec::new();
+        }
         let Some(secret_bytes) = self.doc.held.secret_key else {
             return Vec::new();
         };
@@ -363,7 +457,8 @@ mod tests {
 
     fn device() -> Device {
         let dir = TempDir::new().unwrap();
-        let service = GuardianService::open(dir.path());
+        let mut service = GuardianService::open(dir.path());
+        service.attach_vault_key(&DataKey::from_bytes([0xAB; 32])).unwrap();
         Device { _dir: dir, service }
     }
 
@@ -567,5 +662,81 @@ mod tests {
         let reopened = GuardianService::open(dir.path());
         assert!(reopened.is_enrolled());
         assert_eq!(reopened.owner_guardian_status(), (3, 2));
+    }
+
+    #[test]
+    fn held_shares_are_unreadable_until_the_vault_key_is_attached() {
+        let dir = TempDir::new().unwrap();
+        let identity_key = DataKey::from_bytes([9; 32]);
+        let mut owner = device();
+        {
+            let mut guardian = Device { _dir: TempDir::new().unwrap(), service: GuardianService::open(dir.path()) };
+            assert!(matches!(guardian.service.guardian_public_key(), Err(GuardianServiceError::Locked)));
+            guardian.service.attach_vault_key(&identity_key).unwrap();
+            let mut guardians = vec![guardian, device()];
+            enroll(&mut owner, &mut guardians, &DataKey::from_bytes([1; 32]), 2);
+        }
+
+        // Restart: locked until attached, and answers nobody meanwhile.
+        let mut reopened = GuardianService::open(dir.path());
+        let request = owner.service.owner_build_unlock_request().unwrap();
+        assert!(reopened.guardian_match_unlock_request(&request).is_empty());
+        assert!(!reopened.is_held_unlocked());
+
+        // The wrong key (a wrong passphrase's vault key) opens nothing.
+        assert!(reopened.attach_vault_key(&DataKey::from_bytes([8; 32])).is_err());
+        reopened.attach_vault_key(&identity_key).unwrap();
+        assert_eq!(reopened.guardian_match_unlock_request(&request).len(), 1);
+    }
+
+    #[test]
+    fn re_keying_follows_the_vault_key_across_a_restart() {
+        let dir = TempDir::new().unwrap();
+        let mut owner = device();
+        let mut guardian = Device { _dir: TempDir::new().unwrap(), service: GuardianService::open(dir.path()) };
+        guardian.service.attach_vault_key(&DataKey::from_bytes([1; 32])).unwrap();
+        let mut guardians = vec![guardian, device()];
+        enroll(&mut owner, &mut guardians, &DataKey::from_bytes([2; 32]), 2);
+
+        // Passphrase turned on: the vault key changes.
+        let new_key = DataKey::from_bytes([3; 32]);
+        guardians[0].service.attach_vault_key(&new_key).unwrap();
+        drop(guardians);
+
+        let mut reopened = GuardianService::open(dir.path());
+        assert!(reopened.attach_vault_key(&DataKey::from_bytes([1; 32])).is_err(), "old key must no longer open it");
+        reopened.attach_vault_key(&new_key).unwrap();
+        assert_eq!(reopened.held_for().len(), 1);
+    }
+
+    #[test]
+    fn a_pre_split_store_migrates_its_held_shares_out_of_the_owner_file() {
+        let dir = TempDir::new().unwrap();
+        let legacy = GuardianDocument {
+            owner: OwnerState::default(),
+            held: HeldState {
+                secret_key: Some([4; 32]),
+                held: vec![HeldShare { owner_recovery_public_key: [5; 32], share: vec![1, 2, 3], enrolled_at: Utc::now() }],
+            },
+        };
+        Vault::new(dir.path().join("guardian.enc"), crate::vault_key::platform_provider(dir.path().join("guardian.key")))
+            .save(&legacy)
+            .unwrap();
+
+        let key = DataKey::from_bytes([6; 32]);
+        let mut service = GuardianService::open(dir.path());
+        service.attach_vault_key(&key).unwrap();
+        assert_eq!(service.held_for().len(), 1);
+        drop(service);
+
+        let owner_file: GuardianDocument =
+            Vault::new(dir.path().join("guardian.enc"), crate::vault_key::platform_provider(dir.path().join("guardian.key")))
+                .load()
+                .unwrap();
+        assert!(owner_file.held.held.is_empty() && owner_file.held.secret_key.is_none(), "shares must leave the file-key store");
+
+        let mut reopened = GuardianService::open(dir.path());
+        reopened.attach_vault_key(&key).unwrap();
+        assert_eq!(reopened.held_for().len(), 1);
     }
 }

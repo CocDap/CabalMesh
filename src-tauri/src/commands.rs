@@ -2761,6 +2761,17 @@ pub async fn security_status(state: State<'_, AppState>) -> Result<SecurityStatu
     })
 }
 
+/// Re-attaches the guardian held-shares store to whatever key now protects
+/// the identity vault. Called after every unlock and every change of vault
+/// key; a failure is logged rather than failing the command, since the
+/// vault operation itself already succeeded.
+async fn sync_guardian_key(services: &crate::state::Services, identity: &crate::identity::IdentityStore) {
+    let Some(key) = identity.current_vault_key().ok() else { return };
+    if let Err(error) = services.guardian.lock().await.attach_vault_key(&key) {
+        tracing::warn!(target: "cabalmesh::guardian", %error, "held shares did not follow the vault key");
+    }
+}
+
 /// Supplies the passphrase for a locked vault. On success, identities become
 /// readable for the rest of the session.
 ///
@@ -2773,6 +2784,7 @@ pub async fn security_unlock(passphrase: String, state: State<'_, AppState>) -> 
     let services = state.services()?;
     let mut identity = services.identity.lock().await;
     identity.unlock_with_passphrase(&passphrase).map_err(|_| AppError::VaultLocked)?;
+    sync_guardian_key(&services, &identity).await;
     Ok(())
 }
 
@@ -2788,6 +2800,7 @@ pub async fn security_enable_passphrase(passphrase: String, state: State<'_, App
     let services = state.services()?;
     let mut identity = services.identity.lock().await;
     identity.enable_passphrase(&passphrase).map_err(|_| AppError::VaultLocked)?;
+    sync_guardian_key(&services, &identity).await;
     Ok(())
 }
 
@@ -2803,6 +2816,7 @@ pub async fn security_disable_passphrase(state: State<'_, AppState>) -> Result<(
     let services = state.services()?;
     let mut identity = services.identity.lock().await;
     identity.disable_passphrase().map_err(|_| AppError::VaultLocked)?;
+    sync_guardian_key(&services, &identity).await;
     Ok(())
 }
 
@@ -3111,6 +3125,7 @@ pub async fn guardian_request_unlock(state: State<'_, AppState>) -> Result<(), A
 
     let mut identity = services.identity.lock().await;
     identity.unlock_with_guardian_key(candidate).map_err(|_| AppError::VaultLocked)?;
+    sync_guardian_key(&services, &identity).await;
     Ok(())
 }
 

@@ -42,7 +42,11 @@ fn address(port: u16) -> SocketAddr {
 fn spawn_node(port: u16, peers: &[u16], guardian_dir: &Path) -> (BleHandle, Arc<Mutex<GuardianService>>) {
     let transport = LoopbackTransport::new(address(port), peers.iter().copied().map(address).collect());
     let (handle, _initial_events) = ble::spawn(Arc::new(transport), ble::fresh_identity(), Capabilities::none());
-    let service = Arc::new(Mutex::new(GuardianService::open(guardian_dir)));
+    let mut opened = GuardianService::open(guardian_dir);
+    // Stands in for an unlocked identity vault: held shares are only
+    // readable once its key is attached.
+    opened.attach_vault_key(&DataKey::from_bytes([0x5A; 32])).expect("attach vault key");
+    let service = Arc::new(Mutex::new(opened));
 
     let mut responder_events = handle.subscribe();
     let responder_ble = handle.clone();

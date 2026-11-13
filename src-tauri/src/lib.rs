@@ -149,6 +149,17 @@ pub fn run() {
                 let identity = Arc::new(Mutex::new(IdentityStore::new()));
                 let http = reqwest::Client::new();
                 let guardian_service = Arc::new(Mutex::new(guardian::GuardianService::open(&app_paths::data_dir())));
+                // File mode: the vault is already open, so shares held for
+                // others can be too. Passphrase mode attaches on unlock.
+                let startup_key = {
+                    let identity = identity.lock().await;
+                    if identity.is_locked() { None } else { identity.current_vault_key().ok() }
+                };
+                if let Some(key) = startup_key {
+                    if let Err(error) = guardian_service.lock().await.attach_vault_key(&key) {
+                        tracing::warn!(target: "cabalmesh::guardian", %error, "held shares did not open");
+                    }
+                }
                 let guardian_approvals = guardian_actor::PendingApprovals::new();
 
                 // 1. Phase 1
