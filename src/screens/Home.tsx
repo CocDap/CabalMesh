@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { BackupSuggestion } from "./guardians";
 import { Panel, StatBlock, StatusDot, Terminal } from "../ds";
 import { useLogStream } from "../state/useLogStream";
 import type { LogLine, MeshSnapshotView } from "../types/bindings";
@@ -21,7 +22,7 @@ const RETAINED = 200;
  * here knows that — the tile renders whatever Rust sends, like every other
  * figure on the screen.
  */
-export function Home() {
+export function Home({ onSetUpGuardians }: { onSetUpGuardians?: () => void } = {}) {
   const [snapshot, setSnapshot] = useState<MeshSnapshotView | null>(null);
   const [lines, setLines] = useState<LogLine[]>([]);
 
@@ -62,6 +63,7 @@ export function Home() {
         padding: "var(--space-6)",
       }}
     >
+      {onSetUpGuardians && <BackupSuggestion onSetUp={onSetUpGuardians} />}
       <Panel label="MESH STATUS">
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-5)", padding: "var(--space-6)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>

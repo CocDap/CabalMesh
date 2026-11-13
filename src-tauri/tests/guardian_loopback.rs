@@ -14,14 +14,18 @@ use cabal_ble::PeerId;
 use cabal_guardian::protocol::GuardianMessage;
 use cabal_vault::DataKey;
 use cabalmesh_lib::ble::{self, link::LoopbackTransport, BleEvent, BleHandle};
-use cabalmesh_lib::guardian::GuardianService;
-use cabalmesh_lib::guardian_actor::{approve_unlock, enroll_guardians, request_unlock, respond_to_guardian_traffic, PendingApprovals};
+use cabalmesh_lib::guardian::{GuardianService, RestoreSession};
+use cabalmesh_lib::guardian_actor::{
+    approve, enroll_guardians, request_unlock, respond_to_guardian_traffic, restore_round, GuardianNotice, PendingApprovals,
+};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
+
+const BACKUP: &[u8] = b"[\"vault contents\"]";
 
 fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -42,7 +46,11 @@ fn address(port: u16) -> SocketAddr {
 fn spawn_node(port: u16, peers: &[u16], guardian_dir: &Path) -> (BleHandle, Arc<Mutex<GuardianService>>) {
     let transport = LoopbackTransport::new(address(port), peers.iter().copied().map(address).collect());
     let (handle, _initial_events) = ble::spawn(Arc::new(transport), ble::fresh_identity(), Capabilities::none());
-    let service = Arc::new(Mutex::new(GuardianService::open(guardian_dir)));
+    let mut opened = GuardianService::open(guardian_dir);
+    // Stands in for an unlocked identity vault: held shares are only
+    // readable once its key is attached.
+    opened.attach_vault_key(&DataKey::from_bytes([0x5A; 32])).expect("attach vault key");
+    let service = Arc::new(Mutex::new(opened));
 
     let mut responder_events = handle.subscribe();
     let responder_ble = handle.clone();
@@ -59,10 +67,10 @@ fn spawn_node(port: u16, peers: &[u16], guardian_dir: &Path) -> (BleHandle, Arc<
                         // to prove the wire protocol and the gate's plumbing
                         // both work — a human declining is not a networking
                         // question this file is responsible for testing.
-                        if let Some(id) =
+                        if let Some(GuardianNotice::Approval { id, .. }) =
                             respond_to_guardian_traffic(&responder_service, &responder_ble, &approvals, from, message).await
                         {
-                            let _ = approve_unlock(&approvals, &responder_ble, id).await;
+                            let _ = approve(&approvals, &responder_service, &responder_ble, id).await;
                         }
                     }
                 }
@@ -76,6 +84,25 @@ fn spawn_node(port: u16, peers: &[u16], guardian_dir: &Path) -> (BleHandle, Arc<
     (handle, service)
 }
 
+/// Waits until every guardian has persisted its share. `enroll_guardians`
+/// returns once the shares are *sent*; a test that then reopens the same
+/// directories as a "later session" must not race the first session's write
+/// — a real restart is never that fast.
+async fn until_all_hold_a_share(services: &[Arc<Mutex<GuardianService>>]) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut all = true;
+        for service in services {
+            all &= !service.lock().await.held_for().is_empty();
+        }
+        if all {
+            return;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "a guardian never stored its share");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test]
 async fn enrolling_and_unlocking_across_a_simulated_session_restart() {
     let owner_dir = TempDir::new().unwrap();
@@ -87,9 +114,11 @@ async fn enrolling_and_unlocking_across_a_simulated_session_restart() {
     let guardian_ports: Vec<u16> = (0..3).map(|_| free_port()).collect();
 
     let (owner_ble, owner_service) = spawn_node(port_owner, &[], owner_dir.path());
-    for (dir, &port) in guardian_dirs.iter().zip(&guardian_ports) {
-        spawn_node(port, &[port_owner], dir.path());
-    }
+    let guardians: Vec<_> = guardian_dirs
+        .iter()
+        .zip(&guardian_ports)
+        .map(|(dir, &port)| spawn_node(port, &[port_owner], dir.path()).1)
+        .collect();
 
     tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -97,12 +126,13 @@ async fn enrolling_and_unlocking_across_a_simulated_session_restart() {
     assert_eq!(candidates.len(), 3, "owner should see all three guardian candidates");
 
     let owner_events = owner_ble.subscribe();
-    let outcome = enroll_guardians(&owner_service, &owner_ble, owner_events, &candidates, 2, &vault_key)
+    let outcome = enroll_guardians(&owner_service, &owner_ble, owner_events, &candidates, 2, &vault_key, BACKUP, true, &|_, _| {})
         .await
         .expect("enrollment should succeed");
 
     assert_eq!(outcome.enrolled.len(), 3, "all three guardians should have accepted: {outcome:?}");
     assert!(outcome.no_reply.is_empty());
+    until_all_hold_a_share(&guardians).await;
 
     // --- Session 2: fresh ephemeral identities for everyone, same disk state. ---
     let port_owner_2 = free_port();
@@ -119,7 +149,7 @@ async fn enrolling_and_unlocking_across_a_simulated_session_restart() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let owner_events_2 = owner_ble_2.subscribe();
-    let candidate_key = request_unlock(&owner_service_2, &owner_ble_2, owner_events_2)
+    let candidate_key = request_unlock(&owner_service_2, &owner_ble_2, owner_events_2, &|_, _| {})
         .await
         .expect("unlock should reconstruct the key from two of three guardians");
 
@@ -141,16 +171,19 @@ async fn unlock_fails_when_fewer_than_the_threshold_are_reachable() {
     let port_owner = free_port();
     let guardian_ports: Vec<u16> = (0..3).map(|_| free_port()).collect();
     let (owner_ble, owner_service) = spawn_node(port_owner, &[], owner_dir.path());
-    for (dir, &port) in guardian_dirs.iter().zip(&guardian_ports) {
-        spawn_node(port, &[port_owner], dir.path());
-    }
+    let guardians: Vec<_> = guardian_dirs
+        .iter()
+        .zip(&guardian_ports)
+        .map(|(dir, &port)| spawn_node(port, &[port_owner], dir.path()).1)
+        .collect();
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let candidates: Vec<PeerId> = owner_ble.peers().await.expect("owner peers").iter().map(|p| p.id).collect();
     let owner_events = owner_ble.subscribe();
-    enroll_guardians(&owner_service, &owner_ble, owner_events, &candidates, 3, &vault_key)
+    enroll_guardians(&owner_service, &owner_ble, owner_events, &candidates, 3, &vault_key, BACKUP, true, &|_, _| {})
         .await
         .expect("enrollment should succeed");
+    until_all_hold_a_share(&guardians).await;
 
     // A later session where only one of the three (needing three) is up.
     let port_owner_2 = free_port();
@@ -160,6 +193,139 @@ async fn unlock_fails_when_fewer_than_the_threshold_are_reachable() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let owner_events_2 = owner_ble_2.subscribe();
-    let result = request_unlock(&owner_service_2, &owner_ble_2, owner_events_2).await;
+    let result = request_unlock(&owner_service_2, &owner_ble_2, owner_events_2, &|_, _| {}).await;
     assert!(result.is_err(), "unlock must not succeed with fewer than the threshold answering");
 }
+
+#[tokio::test]
+async fn a_brand_new_device_restores_with_only_the_code() {
+    let owner_dir = TempDir::new().unwrap();
+    let guardian_dirs: Vec<TempDir> = (0..3).map(|_| TempDir::new().unwrap()).collect();
+
+    let port_owner = free_port();
+    let (owner_ble, owner_service) = spawn_node(port_owner, &[], owner_dir.path());
+    let guardians: Vec<_> = guardian_dirs.iter().map(|dir| spawn_node(free_port(), &[port_owner], dir.path()).1).collect();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let candidates: Vec<PeerId> = owner_ble.peers().await.expect("owner peers").iter().map(|p| p.id).collect();
+    // An empty vault: no delay, so the release happens inside this test.
+    // The delay itself is covered against a fake clock in `guardian.rs`.
+    enroll_guardians(&owner_service, &owner_ble, owner_ble.subscribe(), &candidates, 2, &DataKey::from_bytes([3; 32]), BACKUP, false, &|_, _| {})
+        .await
+        .expect("enrollment should succeed");
+    let code = owner_service.lock().await.owner_restore_code().expect("restore-capable enrollment");
+    until_all_hold_a_share(&guardians).await;
+
+    // The owner's device is gone. A new device with an empty data dir and
+    // only the code, near two of the three guardians.
+    let new_dir = TempDir::new().unwrap();
+    let port_new = free_port();
+    let (new_ble, _new_service) = spawn_node(port_new, &[], new_dir.path());
+    for dir in guardian_dirs.iter().take(2) {
+        spawn_node(free_port(), &[port_new], dir.path());
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let session = RestoreSession::new(&code).unwrap();
+    let round = restore_round(&session, &new_ble, new_ble.subscribe(), Duration::from_secs(5)).await;
+    assert_eq!(round.released.len(), 2, "both reachable guardians should release");
+    assert_eq!(session.finish(&round.released).unwrap(), BACKUP);
+}
+
+/// The whole stolen-phone story, over the real transport, with 3-of-5:
+/// a "thief" with the restore code gets guardians to approve, the 24h delay
+/// holds the shares back, the original device hears the pending restore and
+/// vetoes, and the thief ends with nothing.
+#[tokio::test]
+async fn a_restore_with_value_waits_and_the_original_device_can_veto_it() {
+    use cabal_guardian::protocol::GuardianMessage as M;
+    use cabalmesh_lib::guardian_actor::broadcast_restore_cancel;
+
+    let owner_dir = TempDir::new().unwrap();
+    let thief_dir = TempDir::new().unwrap();
+    let guardian_dirs: Vec<TempDir> = (0..5).map(|_| TempDir::new().unwrap()).collect();
+
+    let port_owner = free_port();
+    let port_thief = free_port();
+    let (owner_ble, owner_service) = spawn_node(port_owner, &[], owner_dir.path());
+    let (thief_ble, _) = spawn_node(port_thief, &[], thief_dir.path());
+    for dir in &guardian_dirs {
+        spawn_node(free_port(), &[port_owner, port_thief], dir.path());
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Owner enrolls the five guardians (not the thief's node), 3-of-5, with value.
+    let thief_id = thief_ble.status().await.unwrap().peer_id;
+    let candidates: Vec<PeerId> = owner_ble
+        .peers()
+        .await
+        .unwrap()
+        .iter()
+        .map(|p| p.id)
+        .filter(|id| id.to_string() != thief_id.to_string())
+        .collect();
+    assert_eq!(candidates.len(), 5, "owner should see exactly the five guardians directly");
+    let outcome = enroll_guardians(&owner_service, &owner_ble, owner_ble.subscribe(), &candidates, 3, &DataKey::from_bytes([8; 32]), BACKUP, true, &|_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(outcome.enrolled.len(), 5, "{outcome:?}");
+    let code = owner_service.lock().await.owner_restore_code().unwrap();
+
+    // The owner device listens for pending-restore announcements.
+    let mut owner_events = owner_ble.subscribe();
+    let owner_for_listen = Arc::clone(&owner_service);
+    let heard = tokio::spawn(async move {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, owner_events.recv()).await {
+            if let BleEvent::Received { kind: PacketKind::Guardian, payload, .. } = event {
+                if let Ok(M::RestorePending(pending)) = GuardianMessage::from_bytes(&payload) {
+                    if owner_for_listen.lock().await.owner_match_pending(&pending).is_some() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    });
+
+    // Thief: guardians auto-approve in this harness, but with value the
+    // shares are held back.
+    let session = RestoreSession::new(&code).unwrap();
+    let first = restore_round(&session, &thief_ble, thief_ble.subscribe(), Duration::from_secs(5)).await;
+    assert!(first.released.is_empty(), "nothing may be released inside the delay");
+    assert_eq!(first.waiting.len(), 5, "all five approved and are waiting");
+    let wait = first.waiting.iter().min().unwrap().signed_duration_since(chrono::Utc::now());
+    assert!(wait > chrono::Duration::hours(23), "the delay is ~24h, got {wait}");
+
+    assert!(heard.await.unwrap(), "the original device must hear the pending restore");
+
+    // Veto.
+    broadcast_restore_cancel(&owner_service, &owner_ble).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let after = restore_round(&session, &thief_ble, thief_ble.subscribe(), Duration::from_secs(5)).await;
+    assert!(after.released.is_empty());
+    assert_eq!(after.cancelled, 5, "every guardian reports the restore cancelled");
+}
+
+/// A wrong restore code over the real transport: no guardian answers at all.
+#[tokio::test]
+async fn a_wrong_restore_code_gets_no_answer() {
+    let owner_dir = TempDir::new().unwrap();
+    let guardian_dirs: Vec<TempDir> = (0..3).map(|_| TempDir::new().unwrap()).collect();
+    let port_owner = free_port();
+    let (owner_ble, owner_service) = spawn_node(port_owner, &[], owner_dir.path());
+    for dir in &guardian_dirs {
+        spawn_node(free_port(), &[port_owner], dir.path());
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let candidates: Vec<PeerId> = owner_ble.peers().await.unwrap().iter().map(|p| p.id).collect();
+    enroll_guardians(&owner_service, &owner_ble, owner_ble.subscribe(), &candidates, 2, &DataKey::from_bytes([4; 32]), BACKUP, false, &|_, _| {})
+        .await
+        .unwrap();
+
+    let wrong = cabal_guardian::restore::RestoreSecret::generate().to_code();
+    let session = RestoreSession::new(&wrong).unwrap();
+    let round = restore_round(&session, &owner_ble, owner_ble.subscribe(), Duration::from_secs(3)).await;
+    assert!(round.released.is_empty() && round.waiting.is_empty() && round.cancelled == 0);
+}
+

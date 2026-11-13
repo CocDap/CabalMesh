@@ -202,6 +202,17 @@ impl Balances {
         }
     }
 
+    /// Whether this read shows nothing worth stealing: native NEAR at or
+    /// below `dust_yocto` and every token at zero. Anything unknown —
+    /// never read, an unparseable figure — is *not* empty, because this
+    /// gates skipping the restore delay and must fail towards the delay.
+    #[must_use]
+    pub fn is_known_empty(&self, dust_yocto: u128) -> bool {
+        let Some(native) = self.native.as_deref().and_then(|n| n.parse::<u128>().ok()) else { return false };
+        let zero = |t: &TokenBalance| t.wallet.parse::<u128>() == Ok(0) && t.in_intents.parse::<u128>() == Ok(0);
+        native <= dust_yocto && self.tokens.values().all(zero) && self.native_token.as_ref().is_none_or(zero)
+    }
+
     /// `asset`'s tradable amount, or `None` if it is not known.
     #[must_use]
     pub fn in_intents_raw(&self, symbol: &str) -> Option<u128> {
@@ -400,5 +411,25 @@ mod tests {
         store.save(&fresh).unwrap();
         assert_eq!(store.load("alice.testnet",Network::Testnet).unwrap(),fresh);
         assert_eq!(std::fs::read_to_string(path).unwrap(),"broken JSON");
+    }
+}
+
+#[cfg(test)]
+mod emptiness_tests {
+    use super::*;
+
+    fn read(native: Option<&str>, token: &str) -> Balances {
+        let mut tokens = BTreeMap::new();
+        tokens.insert("USDC".to_owned(), TokenBalance { wallet: token.to_owned(), in_intents: "0".to_owned() });
+        Balances { native: native.map(str::to_owned), tokens, ..Balances::default() }
+    }
+
+    #[test]
+    fn only_a_known_dust_balance_counts_as_empty() {
+        assert!(read(Some("10"), "0").is_known_empty(100));
+        assert!(!read(Some("101"), "0").is_known_empty(100), "native above dust");
+        assert!(!read(Some("10"), "1").is_known_empty(100), "a token balance");
+        assert!(!read(None, "0").is_known_empty(100), "never read");
+        assert!(!read(Some("10"), "garbage").is_known_empty(100), "unparseable");
     }
 }

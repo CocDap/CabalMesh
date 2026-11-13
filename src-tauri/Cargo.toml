@@ -69,6 +69,7 @@ tauri-plugin-cabal-keystore = { path = "tauri-plugin-cabal-keystore" }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
@@ -188,3 +189,11 @@ tempfile = "3"
 cabal-core = { path = "crates/cabal-core" }
 insta = "1.48.0"
 tauri = { version = "2", features = ["test"] }
+
+# Argon2id at 64 MiB is several seconds per derivation unoptimized; every
+# passphrase test would pay it. Optimizing just the hash keeps debug builds
+# and the test suite honest about the real parameters without the wait.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

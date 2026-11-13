@@ -54,5 +54,12 @@ expression: "rendered.join(\"\\n---\\n\")"
 }
 ---
 {
+  "kind": "too_many_attempts",
+  "detail": {
+    "retry_after_secs": 40
+  }
+}
+---
+{
   "kind": "internal"
 }

@@ -100,6 +100,12 @@ pub enum AppError {
     #[error("too many active subscriptions")]
     TooManySubscriptions { limit: u16 },
 
+    /// Unlock refused without trying: too many wrong attempts recently.
+    /// Not a security control (an attacker with the file never asks this
+    /// app) — it makes over-the-shoulder guessing tedious.
+    #[error("too many unlock attempts")]
+    TooManyAttempts { retry_after_secs: u64 },
+
     /// The model call failed in a way the user can fix in Profile.
     ///
     /// Carries no text: a provider's error can name the endpoint.
@@ -213,6 +219,7 @@ impl AppError {
             | Self::NativeTransferUnconfirmed { .. }
             | Self::VaultLocked
             | Self::TooManySubscriptions { .. }
+            | Self::TooManyAttempts { .. }
             | Self::Internal => false,
         }
     }

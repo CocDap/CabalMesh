@@ -31,6 +31,7 @@ fn every_error_variant() {
         AppError::NearAccountNotFunded { account: "abc".into() },
         AppError::VaultLocked,
         AppError::TooManySubscriptions { limit: 16 },
+        AppError::TooManyAttempts { retry_after_secs: 40 },
         AppError::Internal,
     ];
 

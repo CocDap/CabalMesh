@@ -112,6 +112,53 @@ impl<R: Runtime> CabalKeystore<R> {
     }
 }
 
+#[cfg(target_os = "android")]
+#[derive(Debug, Deserialize)]
+struct PresenceAvailableResponse {
+    available: bool,
+}
+
+impl<R: Runtime> CabalKeystore<R> {
+    /// Whether this device can gate a secret on the device passcode
+    /// (Android 11+, with a screen lock set).
+    #[must_use]
+    pub fn presence_available(&self) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            self.0
+                .run_mobile_plugin::<PresenceAvailableResponse>("presenceAvailable", NoArgs {})
+                .map(|r| r.available)
+                .unwrap_or(false)
+        }
+        #[cfg(not(target_os = "android"))]
+        false
+    }
+
+    /// The presence secret: shows the system device-credential prompt and
+    /// blocks until it is answered. Created on first use.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] off Android, [`Error::Plugin`] if the person
+    /// cancelled or the Keystore refused, [`Error::Malformed`] if not 32 bytes.
+    pub fn presence_secret(&self) -> Result<Vec<u8>, Error> {
+        #[cfg(target_os = "android")]
+        {
+            let response = self
+                .0
+                .run_mobile_plugin::<DeviceSecretResponse>("presenceSecret", NoArgs {})
+                .map_err(|error| Error::Plugin(error.to_string()))?;
+            let secret = from_base64(&response.secret).ok_or(Error::Malformed)?;
+            if secret.len() != 32 {
+                return Err(Error::Malformed);
+            }
+            Ok(secret)
+        }
+        #[cfg(not(target_os = "android"))]
+        Err(Error::Unsupported)
+    }
+}
+
 /// Decodes base64 produced by the Kotlin side.
 ///
 /// Returns `None` for anything malformed rather than guessing. A secret that

@@ -92,6 +92,20 @@ impl DataKey {
         self.0
     }
 
+    /// A subkey bound to `label`, for encrypting a second store under the
+    /// same secret without reusing the key itself. One-way: knowing a subkey
+    /// reveals nothing about this key or any subkey under another label.
+    #[must_use]
+    pub fn derive(&self, label: &str) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"cabalmesh/subkey/v1\0");
+        hasher.update(label.as_bytes());
+        hasher.update([0]);
+        hasher.update(self.0);
+        Self(hasher.finalize().into())
+    }
+
     /// A fresh random key.
     ///
     /// # Errors

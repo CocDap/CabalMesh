@@ -176,6 +176,90 @@ pub fn separated(value: u64) -> String {
 pub struct GuardianUnlockPrompt {
     pub id: u32,
     pub from: String,
+    /// `unlock`: an enrolled device asking to open its own vault.
+    /// `restore`: a *new* device rebuilding someone's vault — riskier, and
+    /// approving starts a delay the original device can veto.
+    pub kind: GuardianPromptKind,
+    /// RFC 3339; when this device became a guardian for the owner asking.
+    /// Only known for restores, whose request identifies the owner to this
+    /// device (and only to this device).
+    pub enrolled_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "kebab-case")]
+pub enum GuardianPromptKind {
+    Unlock,
+    Restore,
+}
+
+/// Payload for `guardian-restore-pending`: a guardian is holding a restore
+/// of *this* device's vault. If the person did not start it, they veto with
+/// `guardian_cancel_restore`.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct GuardianRestorePendingNotice {
+    /// RFC 3339.
+    pub release_at: String,
+}
+
+/// Payload for `guardian-enroll-progress`, driving `DISTRIBUTING SHARES`.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct GuardianEnrollProgress {
+    pub peer_id: String,
+    pub stage: GuardianEnrollStage,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "kebab-case")]
+pub enum GuardianEnrollStage {
+    Invited,
+    Accepted,
+    Delivered,
+    NoReply,
+}
+
+/// Payload for `guardian-unlock-progress`: everyday mesh unlock, owner side.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct GuardianUnlockProgress {
+    pub approved: u32,
+    pub threshold: u32,
+}
+
+/// Where a restore onto this (new) device stands.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct GuardianRestoreProgress {
+    /// `none`: no restore in progress. `collecting`: asking guardians.
+    /// `done`: the vault was replaced.
+    pub state: GuardianRestoreState,
+    /// Shares released in the latest round.
+    pub released: u32,
+    /// Shares needed; 0 until a guardian has released one and said.
+    pub threshold: u32,
+    /// Guardians that approved and are waiting out the delay.
+    pub waiting: u32,
+    /// RFC 3339: the earliest moment a waiting guardian releases.
+    pub waiting_until: Option<String>,
+    /// Guardians that report the original device vetoed this restore.
+    pub cancelled: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "kebab-case")]
+pub enum GuardianRestoreState {
+    None,
+    Collecting,
+    Done,
 }
 
 #[cfg(test)]

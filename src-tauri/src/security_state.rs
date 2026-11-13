@@ -20,6 +20,9 @@ pub enum UnlockMode {
     /// file-backed key has been deleted. Requires the passphrase at every
     /// app start.
     Passphrase,
+    /// A 6-digit PIN, peppered with a secret the OS releases only after the
+    /// device passcode (`presence`). Mobile only.
+    Pin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

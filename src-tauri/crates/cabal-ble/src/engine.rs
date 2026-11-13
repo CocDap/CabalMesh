@@ -356,7 +356,13 @@ impl Engine {
             Decision::Accept { relay } => (true, relay),
             Decision::Forward(relay) => (false, Some(relay)),
             Decision::Drop(DropReason::Duplicate | DropReason::Loop) => return Vec::new(),
-            Decision::Drop(_) => (true, None),
+            // Only a packet addressed to someone else can be dropped for
+            // running out of hops or links (a broadcast, or one for us, is
+            // accepted instead). It must never be handed up: this node is
+            // not its recipient, and answering it — as a guardian answering
+            // another guardian's invitation once did — is both wrong and a
+            // leak of who the traffic was for.
+            Decision::Drop(_) => (false, None),
         };
 
         let mut actions = Vec::new();

@@ -458,8 +458,14 @@ impl Packet {
         ))
     }
 
-    /// The deduplication key: who sent it, when, what kind, and a digest of
-    /// the payload.
+    /// The deduplication key: who sent it, to whom, when, what kind, and a
+    /// digest of the payload.
+    ///
+    /// The recipient is included because one sender can address the *same*
+    /// payload to several peers in the same millisecond (a guardian
+    /// enrollment invites five nodes with an identical, empty request).
+    /// Without it, a node that saw the copy meant for someone else first
+    /// dropped its own as a duplicate.
     ///
     /// The TTL is excluded, so the same packet arriving by a long path and a
     /// short one is recognised as one packet rather than two.
@@ -471,6 +477,7 @@ impl Packet {
         payload_digest.copy_from_slice(&digest[..16]);
         DedupKey {
             sender: self.sender,
+            recipient: self.recipient,
             timestamp_ms: self.timestamp_ms,
             kind: self.kind,
             payload_digest,
@@ -482,6 +489,7 @@ impl Packet {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DedupKey {
     pub sender: PeerId,
+    pub recipient: Option<PeerId>,
     pub timestamp_ms: u64,
     pub kind: PacketKind,
     pub payload_digest: [u8; 16],
@@ -686,6 +694,15 @@ mod tests {
         let second = Packet::broadcast(PacketKind::Intent, peer(1), 77, b"b".into());
 
         assert_ne!(first.dedup_key(), second.dedup_key());
+    }
+
+    #[test]
+    fn dedup_separates_the_same_payload_sent_to_different_recipients() {
+        // A guardian enrollment sends one identical request to five peers in
+        // the same millisecond; each must survive as its own packet.
+        let to_a = Packet::directed(PacketKind::Guardian, peer(1), peer(2), 77, b"x".into());
+        let to_b = Packet::directed(PacketKind::Guardian, peer(1), peer(3), 77, b"x".into());
+        assert_ne!(to_a.dedup_key(), to_b.dedup_key());
     }
 
     #[test]

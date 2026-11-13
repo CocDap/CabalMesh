@@ -1,8 +1,10 @@
 ---
 source: tests/ipc_contract.rs
-expression: "shape(&GuardianUnlockPrompt { id: 42, from: \"4B12…9F00\".into() })"
+expression: "shape(&GuardianUnlockPrompt\n{\n    id: 42, from: \"4B12…9F00\".into(), kind: GuardianPromptKind::Restore,\n    enrolled_at: Some(\"2026-08-02T00:00:00+00:00\".into()),\n})"
 ---
 {
   "id": 42,
-  "from": "4B12…9F00"
+  "from": "4B12…9F00",
+  "kind": "restore",
+  "enrolledAt": "2026-08-02T00:00:00+00:00"
 }

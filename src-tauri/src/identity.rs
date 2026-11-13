@@ -109,7 +109,9 @@ impl IdentityStore {
             // supplies the passphrase; `load_identities` below is skipped
             // while locked, so `identities` stays empty rather than the
             // command surface racing an open that never happened.
-            crate::security_state::UnlockMode::Passphrase => (Box::new(crate::vault_key::LockedProvider), true),
+            crate::security_state::UnlockMode::Passphrase | crate::security_state::UnlockMode::Pin => {
+                (Box::new(crate::vault_key::LockedProvider), true)
+            }
         };
 
         let mut store = Self {
@@ -176,6 +178,7 @@ impl IdentityStore {
     /// never actually enabled).
     pub fn unlock_with_passphrase(&mut self, passphrase: &str) -> Result<Vec<IdentityView>, Box<dyn Error>> {
         let provider = cabal_vault::PassphraseKeyProvider::open(&self.vault_salt_path, passphrase)?;
+        let legacy = provider.needs_upgrade();
         let candidate = Vault::new(self.vault_path.clone(), Box::new(provider) as Box<dyn cabal_vault::KeyProvider>);
         let records: Vec<IdentityRecord> = candidate.load()?;
 
@@ -183,7 +186,21 @@ impl IdentityStore {
         self.identities = records;
         self.locked = false;
         self.ensure_near_keys()?;
+        if legacy {
+            // Enrolled under the weaker pre-envelope parameters: re-encrypt
+            // under the current ones now that the passphrase is in hand. Not
+            // fatal — the vault is open either way, and the next unlock
+            // tries again.
+            if let Err(error) = self.enable_passphrase(passphrase) {
+                tracing::warn!(target: "cabalmesh::vault", %error, "could not upgrade the passphrase parameters");
+            }
+        }
         self.get_identity_views()
+    }
+
+    /// Persisted wrong-attempt counter for this vault. See `unlock_attempts`.
+    pub(crate) fn unlock_attempts(&self) -> crate::unlock_attempts::UnlockAttempts {
+        crate::unlock_attempts::UnlockAttempts::new(self.vault_path.with_file_name("unlock_attempts.json"))
     }
 
     /// The key currently protecting the vault, for splitting into guardian
@@ -259,6 +276,63 @@ impl IdentityStore {
         self.get_identity_views()
     }
 
+    /// The vault's contents, serialized, for guardians to hold as a
+    /// restore backup (wrapped by `GuardianService` before it leaves).
+    ///
+    /// # Errors
+    ///
+    /// The vault is locked.
+    pub fn backup_plaintext(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        if self.locked {
+            return Err("the vault is locked".into());
+        }
+        Ok(serde_json::to_vec(&self.identities)?)
+    }
+
+    /// Replaces this device's vault with one restored from guardians.
+    ///
+    /// The restored records are written under a fresh file-backed key —
+    /// whatever protected them on the lost device does not exist here — and
+    /// the unlock mode reset to `File`; the person can turn a passphrase
+    /// back on from `SECURITY`. The vault being replaced is kept beside it
+    /// as `vault.enc.pre-restore-<unix time>` together with its key, never
+    /// deleted, since the UI's "export it first" warning can be ignored.
+    ///
+    /// # Errors
+    ///
+    /// `plaintext` is not a vault's contents, or a write failed.
+    pub fn adopt_restored(&mut self, plaintext: &[u8]) -> Result<Vec<IdentityView>, Box<dyn Error>> {
+        let records: Vec<IdentityRecord> = serde_json::from_slice(plaintext)?;
+        if records.is_empty() {
+            return Err("the restored vault holds no identities".into());
+        }
+
+        let stamp = chrono::Utc::now().timestamp();
+        for path in [&self.vault_path, &self.vault_key_path, &self.vault_salt_path] {
+            if path.exists() {
+                let mut kept = path.clone().into_os_string();
+                kept.push(format!(".pre-restore-{stamp}"));
+                fs::rename(path, PathBuf::from(kept))?;
+            }
+        }
+
+        let provider = crate::vault_key::platform_provider(self.vault_key_path.clone());
+        let new_vault = Vault::new(self.vault_path.clone(), Box::new(provider) as Box<dyn cabal_vault::KeyProvider>);
+        new_vault.save(&records)?;
+        let round_tripped: Vec<IdentityRecord> = new_vault.load()?;
+        if round_tripped != records {
+            return Err("restored vault did not read back identically".into());
+        }
+
+        self.identity_vault = new_vault;
+        self.identities = records;
+        self.locked = false;
+        crate::security_state::SecurityState { mode: crate::security_state::UnlockMode::File }
+            .save(&DocumentStore::new(self.security_state_path.clone()))?;
+        self.ensure_near_keys()?;
+        self.get_identity_views()
+    }
+
     /// Turns passphrase protection on: re-encrypts the vault under a key
     /// derived from `passphrase`, deletes the file-backed key it replaces,
     /// and persists the switch so the next launch asks for the passphrase.
@@ -270,8 +344,63 @@ impl IdentityStore {
         if self.locked {
             return Err("cannot enable passphrase protection on a locked vault".into());
         }
-
         let provider = cabal_vault::PassphraseKeyProvider::create(&self.vault_salt_path, passphrase)?;
+        self.reencrypt_under_derived(provider, crate::security_state::UnlockMode::Passphrase)
+    }
+
+    /// Turns PIN protection on (mobile): the key is derived from `pin` *and*
+    /// the presence secret, which the OS releases only after the device
+    /// passcode — see `presence` for what that does and does not buy.
+    ///
+    /// # Errors
+    ///
+    /// The vault is locked, `pin` is not six digits, this device has no
+    /// presence store, the person cancelled the passcode prompt, or
+    /// re-encryption failed.
+    pub fn enable_pin(&mut self, pin: &str) -> Result<(), Box<dyn Error>> {
+        if self.locked {
+            return Err("cannot enable PIN protection on a locked vault".into());
+        }
+        if !crate::presence::is_valid_pin(pin) {
+            return Err("a PIN is exactly six digits".into());
+        }
+        if !crate::presence::available() {
+            return Err("this device cannot hold a PIN safely; use a passphrase".into());
+        }
+        let secret = crate::presence::secret()?;
+        let provider = cabal_vault::PassphraseKeyProvider::create_with_pepper(
+            &self.vault_salt_path,
+            pin,
+            Some((crate::presence::PEPPER_NAME, &secret)),
+        )?;
+        self.reencrypt_under_derived(provider, crate::security_state::UnlockMode::Pin)
+    }
+
+    /// Supplies the PIN for a vault in `UnlockMode::Pin`. Shows the system
+    /// passcode prompt on a real device.
+    ///
+    /// # Errors
+    ///
+    /// Wrong PIN, cancelled prompt, or no presence store.
+    pub fn unlock_with_pin(&mut self, pin: &str) -> Result<Vec<IdentityView>, Box<dyn Error>> {
+        let secret = crate::presence::secret()?;
+        let provider = cabal_vault::PassphraseKeyProvider::open_with_pepper(&self.vault_salt_path, pin, Some(&secret))?;
+        let candidate = Vault::new(self.vault_path.clone(), Box::new(provider) as Box<dyn cabal_vault::KeyProvider>);
+        let records: Vec<IdentityRecord> = candidate.load()?;
+        self.identity_vault = candidate;
+        self.identities = records;
+        self.locked = false;
+        self.ensure_near_keys()?;
+        self.get_identity_views()
+    }
+
+    /// Re-encrypts the vault under a derived key, deletes the file key it
+    /// replaces, and persists `mode` so the next launch asks for it.
+    fn reencrypt_under_derived(
+        &mut self,
+        provider: cabal_vault::PassphraseKeyProvider,
+        mode: crate::security_state::UnlockMode,
+    ) -> Result<(), Box<dyn Error>> {
         let new_vault = Vault::new(self.vault_path.clone(), Box::new(provider) as Box<dyn cabal_vault::KeyProvider>);
         new_vault.save(&self.identities)?;
 
@@ -292,8 +421,7 @@ impl IdentityStore {
         // the KEYS screen's claim of passphrase protection false.
         let _ = fs::remove_file(&self.vault_key_path);
 
-        crate::security_state::SecurityState { mode: crate::security_state::UnlockMode::Passphrase }
-            .save(&DocumentStore::new(self.security_state_path.clone()))?;
+        crate::security_state::SecurityState { mode }.save(&DocumentStore::new(self.security_state_path.clone()))?;
         Ok(())
     }
 
@@ -601,7 +729,9 @@ mod security_tests {
             crate::security_state::UnlockMode::File => {
                 (Box::new(crate::vault_key::platform_provider(vault_key_path.clone())), false)
             }
-            crate::security_state::UnlockMode::Passphrase => (Box::new(crate::vault_key::LockedProvider), true),
+            crate::security_state::UnlockMode::Passphrase | crate::security_state::UnlockMode::Pin => {
+                (Box::new(crate::vault_key::LockedProvider), true)
+            }
         };
 
         let mut store = IdentityStore {
@@ -681,6 +811,95 @@ mod security_tests {
         assert_eq!(views.len(), original.len());
 
         std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    #[test]
+    fn a_restored_vault_replaces_the_current_one_and_keeps_the_old_beside_it() {
+        let lost_dir = tempfile::TempDir::new().unwrap();
+        let mut lost = bridge_from_disk(&lost_dir.path().to_path_buf());
+        lost.generate_new_identity("Lost".to_string(), "🦊".to_string()).unwrap();
+        let backup = lost.backup_plaintext().unwrap();
+
+        // A new device: auto-created its own wallet, and is passphrase-locked.
+        let new_dir = tempfile::TempDir::new().unwrap();
+        let mut fresh = bridge_from_disk(&new_dir.path().to_path_buf());
+        fresh.enable_passphrase("hunter2222").unwrap();
+        let mut fresh = bridge_from_disk(&new_dir.path().to_path_buf());
+        assert!(fresh.is_locked());
+
+        fresh.adopt_restored(&backup).unwrap();
+        assert!(!fresh.is_locked());
+        assert_eq!(fresh.identities, lost.identities);
+        assert_eq!(fresh.security_mode(), crate::security_state::UnlockMode::File);
+        let kept = std::fs::read_dir(new_dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("vault.enc.pre-restore-"))
+            .count();
+        assert_eq!(kept, 1, "the replaced vault must be kept, not deleted");
+
+        // Survives a restart with no input.
+        let restarted = bridge_from_disk(&new_dir.path().to_path_buf());
+        assert!(!restarted.is_locked());
+        assert_eq!(restarted.identities, lost.identities);
+
+        assert!(fresh.adopt_restored(b"not a vault").is_err());
+    }
+
+    #[test]
+    fn a_legacy_passphrase_vault_is_upgraded_on_unlock() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+        let mut bridge = bridge_from_disk(&path);
+        bridge.enable_passphrase("hunter2222").unwrap();
+        let original = bridge.identities.clone();
+
+        // Rewrite as an old install would have left it: bare-hex salt, vault
+        // encrypted under Argon2 crate defaults.
+        std::fs::write(&bridge.vault_salt_path, hex::encode([3_u8; 16])).unwrap();
+        let legacy = cabal_vault::PassphraseKeyProvider::open(&bridge.vault_salt_path, "hunter2222").unwrap();
+        Vault::new(bridge.vault_path.clone(), Box::new(legacy) as Box<dyn cabal_vault::KeyProvider>)
+            .save(&original)
+            .unwrap();
+
+        let mut restarted = bridge_from_disk(&path);
+        restarted.unlock_with_passphrase("hunter2222").unwrap();
+        let salt = std::fs::read_to_string(&restarted.vault_salt_path).unwrap();
+        assert!(salt.contains("\"m\":65536"), "re-enrolled under current parameters: {salt}");
+
+        let mut again = bridge_from_disk(&path);
+        again.unlock_with_passphrase("hunter2222").unwrap();
+        assert_eq!(again.identities, original);
+    }
+
+    #[test]
+    fn a_pin_needs_the_presence_secret_and_survives_a_restart() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+        let mut bridge = bridge_from_disk(&path);
+        let original = bridge.identities.clone();
+
+        // Desktop-like: no presence store, so no PIN.
+        assert!(bridge.enable_pin("123456").is_err());
+
+        crate::presence::with_test_secret(Some(vec![0x42; 32]), || {
+            assert!(bridge.enable_pin("12345").is_err(), "five digits");
+            assert!(bridge.enable_pin("12345a").is_err(), "not digits");
+            bridge.enable_pin("123456").unwrap();
+            assert_eq!(bridge.security_mode(), crate::security_state::UnlockMode::Pin);
+
+            let mut restarted = bridge_from_disk(&path);
+            assert!(restarted.is_locked());
+            assert!(restarted.unlock_with_pin("654321").is_err());
+            assert!(restarted.unlock_with_passphrase("123456").is_err(), "the PIN alone is not the key");
+            restarted.unlock_with_pin("123456").unwrap();
+            assert_eq!(restarted.identities, original);
+        });
+
+        // Same PIN, different device secret (vault copied elsewhere): refused.
+        crate::presence::with_test_secret(Some(vec![0x43; 32]), || {
+            assert!(bridge_from_disk(&path).unlock_with_pin("123456").is_err());
+        });
     }
 
     #[test]

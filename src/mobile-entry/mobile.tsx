@@ -78,7 +78,7 @@ function App() {
   return (
     <AppShell screen={screen} onNavigate={setScreen}>
       {screen.name === "home" ? (
-        <Home />
+        <Home onSetUpGuardians={() => setScreen({ name: "vault", tab: "KEYS" })} />
       ) : screen.name === "nodes" ? (
         <Nodes />
       ) : screen.name === "intents" ? (

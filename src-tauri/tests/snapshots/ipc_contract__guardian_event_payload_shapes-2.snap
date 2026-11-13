@@ -1,0 +1,8 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&GuardianUnlockProgress { approved: 2, threshold: 3 })"
+---
+{
+  "approved": 2,
+  "threshold": 3
+}

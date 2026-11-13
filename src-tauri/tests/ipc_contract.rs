@@ -26,7 +26,10 @@
 
 use cabal_core::Chain;
 use cabal_near::{token_diff_payload, AccountId, NearKeypair, TokenDiff};
-use cabalmesh_lib::bindings::GuardianUnlockPrompt;
+use cabalmesh_lib::bindings::{
+    GuardianEnrollProgress, GuardianEnrollStage, GuardianPromptKind, GuardianRestorePendingNotice, GuardianRestoreProgress,
+    GuardianRestoreState, GuardianUnlockPrompt, GuardianUnlockProgress,
+};
 use cabalmesh_lib::commands::{
     GuardianCandidate, GuardianEnrollResult, GuardianStatus, NearAccountView, NearTokenView, SecurityStatus,
 };
@@ -98,6 +101,9 @@ fn guardian_status_shape() {
         guardian_count: 5,
         threshold: 3,
         holding_for: 0,
+        restore_ready: true,
+        holding_unlocked: true,
+        suggest_backup: false,
     }));
 }
 
@@ -111,12 +117,36 @@ fn guardian_enroll_result_shape() {
 
 #[test]
 fn guardian_unlock_prompt_shape() {
-    insta::assert_snapshot!(shape(&GuardianUnlockPrompt { id: 42, from: "4B12…9F00".into() }));
+    insta::assert_snapshot!(shape(&GuardianUnlockPrompt {
+        id: 42,
+        from: "4B12…9F00".into(),
+        kind: GuardianPromptKind::Restore,
+        enrolled_at: Some("2026-08-02T00:00:00+00:00".into()),
+    }));
+}
+
+#[test]
+fn guardian_restore_progress_shape() {
+    insta::assert_snapshot!(shape(&GuardianRestoreProgress {
+        state: GuardianRestoreState::Collecting,
+        released: 1,
+        threshold: 3,
+        waiting: 2,
+        waiting_until: Some("2026-08-03T14:02:00+00:00".into()),
+        cancelled: 0,
+    }));
+}
+
+#[test]
+fn guardian_event_payload_shapes() {
+    insta::assert_snapshot!(shape(&GuardianRestorePendingNotice { release_at: "2026-08-03T14:02:00+00:00".into() }));
+    insta::assert_snapshot!(shape(&GuardianUnlockProgress { approved: 2, threshold: 3 }));
+    insta::assert_snapshot!(shape(&GuardianEnrollProgress { peer_id: "7f3a1209c2e100aa".into(), stage: GuardianEnrollStage::Delivered }));
 }
 
 #[test]
 fn security_status_shape() {
-    insta::assert_snapshot!(shape(&SecurityStatus { locked: false, passphrase_enabled: true }));
+    insta::assert_snapshot!(shape(&SecurityStatus { locked: false, passphrase_enabled: true, pin_enabled: false, pin_available: false }));
 }
 
 // ---------------------------------------------------------------------------
