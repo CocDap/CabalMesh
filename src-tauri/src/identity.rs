@@ -109,7 +109,9 @@ impl IdentityStore {
             // supplies the passphrase; `load_identities` below is skipped
             // while locked, so `identities` stays empty rather than the
             // command surface racing an open that never happened.
-            crate::security_state::UnlockMode::Passphrase => (Box::new(crate::vault_key::LockedProvider), true),
+            crate::security_state::UnlockMode::Passphrase | crate::security_state::UnlockMode::Pin => {
+                (Box::new(crate::vault_key::LockedProvider), true)
+            }
         };
 
         let mut store = Self {
@@ -342,8 +344,63 @@ impl IdentityStore {
         if self.locked {
             return Err("cannot enable passphrase protection on a locked vault".into());
         }
-
         let provider = cabal_vault::PassphraseKeyProvider::create(&self.vault_salt_path, passphrase)?;
+        self.reencrypt_under_derived(provider, crate::security_state::UnlockMode::Passphrase)
+    }
+
+    /// Turns PIN protection on (mobile): the key is derived from `pin` *and*
+    /// the presence secret, which the OS releases only after the device
+    /// passcode — see `presence` for what that does and does not buy.
+    ///
+    /// # Errors
+    ///
+    /// The vault is locked, `pin` is not six digits, this device has no
+    /// presence store, the person cancelled the passcode prompt, or
+    /// re-encryption failed.
+    pub fn enable_pin(&mut self, pin: &str) -> Result<(), Box<dyn Error>> {
+        if self.locked {
+            return Err("cannot enable PIN protection on a locked vault".into());
+        }
+        if !crate::presence::is_valid_pin(pin) {
+            return Err("a PIN is exactly six digits".into());
+        }
+        if !crate::presence::available() {
+            return Err("this device cannot hold a PIN safely; use a passphrase".into());
+        }
+        let secret = crate::presence::secret()?;
+        let provider = cabal_vault::PassphraseKeyProvider::create_with_pepper(
+            &self.vault_salt_path,
+            pin,
+            Some((crate::presence::PEPPER_NAME, &secret)),
+        )?;
+        self.reencrypt_under_derived(provider, crate::security_state::UnlockMode::Pin)
+    }
+
+    /// Supplies the PIN for a vault in `UnlockMode::Pin`. Shows the system
+    /// passcode prompt on a real device.
+    ///
+    /// # Errors
+    ///
+    /// Wrong PIN, cancelled prompt, or no presence store.
+    pub fn unlock_with_pin(&mut self, pin: &str) -> Result<Vec<IdentityView>, Box<dyn Error>> {
+        let secret = crate::presence::secret()?;
+        let provider = cabal_vault::PassphraseKeyProvider::open_with_pepper(&self.vault_salt_path, pin, Some(&secret))?;
+        let candidate = Vault::new(self.vault_path.clone(), Box::new(provider) as Box<dyn cabal_vault::KeyProvider>);
+        let records: Vec<IdentityRecord> = candidate.load()?;
+        self.identity_vault = candidate;
+        self.identities = records;
+        self.locked = false;
+        self.ensure_near_keys()?;
+        self.get_identity_views()
+    }
+
+    /// Re-encrypts the vault under a derived key, deletes the file key it
+    /// replaces, and persists `mode` so the next launch asks for it.
+    fn reencrypt_under_derived(
+        &mut self,
+        provider: cabal_vault::PassphraseKeyProvider,
+        mode: crate::security_state::UnlockMode,
+    ) -> Result<(), Box<dyn Error>> {
         let new_vault = Vault::new(self.vault_path.clone(), Box::new(provider) as Box<dyn cabal_vault::KeyProvider>);
         new_vault.save(&self.identities)?;
 
@@ -364,8 +421,7 @@ impl IdentityStore {
         // the KEYS screen's claim of passphrase protection false.
         let _ = fs::remove_file(&self.vault_key_path);
 
-        crate::security_state::SecurityState { mode: crate::security_state::UnlockMode::Passphrase }
-            .save(&DocumentStore::new(self.security_state_path.clone()))?;
+        crate::security_state::SecurityState { mode }.save(&DocumentStore::new(self.security_state_path.clone()))?;
         Ok(())
     }
 
@@ -673,7 +729,9 @@ mod security_tests {
             crate::security_state::UnlockMode::File => {
                 (Box::new(crate::vault_key::platform_provider(vault_key_path.clone())), false)
             }
-            crate::security_state::UnlockMode::Passphrase => (Box::new(crate::vault_key::LockedProvider), true),
+            crate::security_state::UnlockMode::Passphrase | crate::security_state::UnlockMode::Pin => {
+                (Box::new(crate::vault_key::LockedProvider), true)
+            }
         };
 
         let mut store = IdentityStore {
@@ -812,6 +870,36 @@ mod security_tests {
         let mut again = bridge_from_disk(&path);
         again.unlock_with_passphrase("hunter2222").unwrap();
         assert_eq!(again.identities, original);
+    }
+
+    #[test]
+    fn a_pin_needs_the_presence_secret_and_survives_a_restart() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+        let mut bridge = bridge_from_disk(&path);
+        let original = bridge.identities.clone();
+
+        // Desktop-like: no presence store, so no PIN.
+        assert!(bridge.enable_pin("123456").is_err());
+
+        crate::presence::with_test_secret(Some(vec![0x42; 32]), || {
+            assert!(bridge.enable_pin("12345").is_err(), "five digits");
+            assert!(bridge.enable_pin("12345a").is_err(), "not digits");
+            bridge.enable_pin("123456").unwrap();
+            assert_eq!(bridge.security_mode(), crate::security_state::UnlockMode::Pin);
+
+            let mut restarted = bridge_from_disk(&path);
+            assert!(restarted.is_locked());
+            assert!(restarted.unlock_with_pin("654321").is_err());
+            assert!(restarted.unlock_with_passphrase("123456").is_err(), "the PIN alone is not the key");
+            restarted.unlock_with_pin("123456").unwrap();
+            assert_eq!(restarted.identities, original);
+        });
+
+        // Same PIN, different device secret (vault copied elsewhere): refused.
+        crate::presence::with_test_secret(Some(vec![0x43; 32]), || {
+            assert!(bridge_from_disk(&path).unlock_with_pin("123456").is_err());
+        });
     }
 
     #[test]

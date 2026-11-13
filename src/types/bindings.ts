@@ -542,7 +542,21 @@ export type SecurityStatus = {
  * `passphraseEnabled` stays true even seconds after a successful
  * unlock, when `locked` has already gone false.
  */
-locked: boolean, passphraseEnabled: boolean, };
+locked: boolean, 
+/**
+ * True for a passphrase *or* a PIN: anything that locks the vault at
+ * launch. Kept under this name for the frozen desktop contract.
+ */
+passphraseEnabled: boolean, 
+/**
+ * The vault is PIN-protected: the lock screen asks for six digits.
+ */
+pinEnabled: boolean, 
+/**
+ * This device can hold a PIN safely (see `presence`). False on
+ * desktop, where the passphrase is the only factor.
+ */
+pinAvailable: boolean, };
 
 /**
  * What the splash screen needs to decide what it is offering.

@@ -42,6 +42,7 @@ mod telemetry;
 mod vault_key;
 mod security_state;
 mod unlock_attempts;
+mod presence;
 pub mod guardian;
 pub mod guardian_actor;
 pub mod intent_chat;
@@ -147,7 +148,22 @@ pub fn run() {
         // The Android BLE radio. Registers a handle on Android and a no-op
         // elsewhere, so the app builds identically on every platform.
         .plugin(tauri_plugin_cabal_ble::init())
+        // The Android Keystore. Registered so the PIN path's presence secret
+        // can be reached; a no-op elsewhere.
+        .plugin(tauri_plugin_cabal_keystore::init())
         .setup(|app| {
+            // The PIN path's presence secret on Android, if this device can
+            // gate one on the screen lock (API 30+, lock set). See presence.rs.
+            #[cfg(target_os = "android")]
+            {
+                use tauri_plugin_cabal_keystore::CabalKeystoreExt;
+                let handle = app.handle().clone();
+                if handle.cabal_keystore().presence_available() {
+                    presence::install_android_source(Box::new(move || {
+                        handle.cabal_keystore().presence_secret().map_err(|error| error.to_string())
+                    }));
+                }
+            }
             // Synchronously, before the webview exists. Bootstrap fills the
             // services in afterwards; until then commands get NotReady rather
             // than a panic from an unmanaged type.
@@ -579,6 +595,7 @@ pub fn run() {
             commands::security_unlock,
             commands::security_enable_passphrase,
             commands::security_disable_passphrase,
+            commands::security_enable_pin,
             commands::vault_export_key,
             commands::vault_import_key,
             commands::guardian_candidates,

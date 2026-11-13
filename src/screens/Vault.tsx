@@ -131,6 +131,9 @@ export function Vault({
  */
 function SecurityPanel({ status, onChanged }: { status: SecurityStatus | null; onChanged: () => void }) {
   const [mode, setMode] = useState<"idle" | "enabling" | "confirming-disable">("idle");
+  // PIN only where `presence` can gate it on the device passcode; see
+  // src-tauri/src/presence.rs. Desktop never offers it.
+  const [kind, setKind] = useState<"passphrase" | "pin">("passphrase");
   const [passphrase, setPassphrase] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
@@ -149,7 +152,8 @@ function SecurityPanel({ status, onChanged }: { status: SecurityStatus | null; o
     setBusy(true);
     setError(null);
     try {
-      await invoke("security_enable_passphrase", { passphrase });
+      if (kind === "pin") await invoke("security_enable_pin", { pin: passphrase });
+      else await invoke("security_enable_passphrase", { passphrase });
       reset();
       onChanged();
     } catch (failure) {
@@ -188,7 +192,7 @@ function SecurityPanel({ status, onChanged }: { status: SecurityStatus | null; o
                 color: "var(--text-primary)",
               }}
             >
-              PASSPHRASE UNLOCK
+              {status.pinEnabled ? "PIN UNLOCK" : "PASSPHRASE UNLOCK"}
             </span>
             <span
               style={{
@@ -198,7 +202,11 @@ function SecurityPanel({ status, onChanged }: { status: SecurityStatus | null; o
                 color: "var(--text-muted)",
               }}
             >
-              {status.passphraseEnabled ? "ENABLED — REQUIRED EVERY LAUNCH" : "OFF — DEFAULT"}
+              {status.pinEnabled
+                ? "6 DIGITS + DEVICE SCREEN LOCK — EVERY LAUNCH"
+                : status.passphraseEnabled
+                  ? "ENABLED — REQUIRED EVERY LAUNCH"
+                  : "OFF — DEFAULT"}
             </span>
           </div>
 
@@ -223,9 +231,32 @@ function SecurityPanel({ status, onChanged }: { status: SecurityStatus | null; o
               </Button>
             )
           ) : mode === "enabling" ? null : (
-            <Button tone="secondary" size="sm" className="cm-touch" onClick={() => setMode("enabling")}>
-              SET UP
-            </Button>
+            <div style={{ display: "flex", gap: "var(--space-4)" }}>
+              {status.pinAvailable && (
+                <Button
+                  tone="secondary"
+                  size="sm"
+                  className="cm-touch"
+                  onClick={() => {
+                    setKind("pin");
+                    setMode("enabling");
+                  }}
+                >
+                  SET UP PIN
+                </Button>
+              )}
+              <Button
+                tone="secondary"
+                size="sm"
+                className="cm-touch"
+                onClick={() => {
+                  setKind("passphrase");
+                  setMode("enabling");
+                }}
+              >
+                {status.pinAvailable ? "PASSPHRASE" : "SET UP"}
+              </Button>
+            </div>
           )}
         </div>
 
@@ -237,20 +268,28 @@ function SecurityPanel({ status, onChanged }: { status: SecurityStatus | null; o
             }}
             style={{ display: "flex", flexDirection: "column", gap: "var(--space-5)" }}
           >
-            <Field label="NEW PASSPHRASE" htmlFor="security-passphrase" hint={`AT LEAST ${MIN_PASSPHRASE_LEN} CHARACTERS`}>
+            <Field
+              label={kind === "pin" ? "NEW PIN" : "NEW PASSPHRASE"}
+              htmlFor="security-passphrase"
+              hint={kind === "pin" ? "6 DIGITS · YOUR SCREEN LOCK IS ASKED TOO" : `AT LEAST ${MIN_PASSPHRASE_LEN} CHARACTERS`}
+            >
               <Input
                 id="security-passphrase"
                 type="password"
+                inputMode={kind === "pin" ? "numeric" : undefined}
+                maxLength={kind === "pin" ? 6 : undefined}
                 autoComplete="new-password"
                 autoFocus
                 value={passphrase}
                 onChange={(event) => setPassphrase((event.target as HTMLInputElement).value)}
               />
             </Field>
-            <Field label="CONFIRM PASSPHRASE" htmlFor="security-passphrase-confirm" error={error ?? undefined}>
+            <Field label={kind === "pin" ? "CONFIRM PIN" : "CONFIRM PASSPHRASE"} htmlFor="security-passphrase-confirm" error={error ?? undefined}>
               <Input
                 id="security-passphrase-confirm"
                 type="password"
+                inputMode={kind === "pin" ? "numeric" : undefined}
+                maxLength={kind === "pin" ? 6 : undefined}
                 autoComplete="new-password"
                 invalid={!!error}
                 value={confirm}
@@ -266,7 +305,11 @@ function SecurityPanel({ status, onChanged }: { status: SecurityStatus | null; o
                 size="md"
                 className="cm-touch"
                 type="submit"
-                disabled={busy || passphrase.length < MIN_PASSPHRASE_LEN || passphrase !== confirm}
+                disabled={
+                  busy ||
+                  passphrase !== confirm ||
+                  (kind === "pin" ? !/^\d{6}$/.test(passphrase) : passphrase.length < MIN_PASSPHRASE_LEN)
+                }
               >
                 {busy ? "SETTING UP…" : "CONFIRM"}
               </Button>

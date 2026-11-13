@@ -53,6 +53,7 @@ const COMMANDS: &[&str] = &[
     "preview_intent",
     "profile_summary",
     "security_disable_passphrase",
+    "security_enable_pin",
     "security_enable_passphrase",
     "security_status",
     "security_unlock",

@@ -2707,6 +2707,7 @@ pub async fn vault_keys(state: State<'_, AppState>) -> Result<Vec<VaultRow>, App
     let vault_key_detail = match identity.security_mode() {
         crate::security_state::UnlockMode::File => "FILE-BACKED. DEVICE KEY STORE PENDING.",
         crate::security_state::UnlockMode::Passphrase => "PASSPHRASE-DERIVED (ARGON2ID).",
+        crate::security_state::UnlockMode::Pin => "PIN + DEVICE PASSCODE (ARGON2ID, OS-GATED SECRET).",
     };
 
     Ok(vec![
@@ -2743,7 +2744,14 @@ pub struct SecurityStatus {
     /// `passphraseEnabled` stays true even seconds after a successful
     /// unlock, when `locked` has already gone false.
     pub locked: bool,
+    /// True for a passphrase *or* a PIN: anything that locks the vault at
+    /// launch. Kept under this name for the frozen desktop contract.
     pub passphrase_enabled: bool,
+    /// The vault is PIN-protected: the lock screen asks for six digits.
+    pub pin_enabled: bool,
+    /// This device can hold a PIN safely (see `presence`). False on
+    /// desktop, where the passphrase is the only factor.
+    pub pin_available: bool,
 }
 
 /// Whether the vault needs a passphrase before use, and how it is protected.
@@ -2757,7 +2765,9 @@ pub async fn security_status(state: State<'_, AppState>) -> Result<SecurityStatu
     let identity = services.identity.lock().await;
     Ok(SecurityStatus {
         locked: identity.is_locked(),
-        passphrase_enabled: identity.security_mode() == crate::security_state::UnlockMode::Passphrase,
+        passphrase_enabled: identity.security_mode() != crate::security_state::UnlockMode::File,
+        pin_enabled: identity.security_mode() == crate::security_state::UnlockMode::Pin,
+        pin_available: crate::presence::available(),
     })
 }
 
@@ -2786,7 +2796,13 @@ pub async fn security_unlock(passphrase: String, state: State<'_, AppState>) -> 
     let attempts = identity.unlock_attempts();
     let now = chrono::Utc::now().timestamp();
     attempts.check(now).map_err(|retry_after_secs| AppError::TooManyAttempts { retry_after_secs })?;
-    if identity.unlock_with_passphrase(&passphrase).is_err() {
+    let outcome = if identity.security_mode() == crate::security_state::UnlockMode::Pin {
+        // Shows the system passcode prompt and blocks until answered.
+        tokio::task::block_in_place(|| identity.unlock_with_pin(&passphrase).is_ok())
+    } else {
+        identity.unlock_with_passphrase(&passphrase).is_ok()
+    };
+    if !outcome {
         attempts.record_failure(now);
         return Err(AppError::VaultLocked);
     }
@@ -2807,6 +2823,32 @@ pub async fn security_enable_passphrase(passphrase: String, state: State<'_, App
     let services = state.services()?;
     let mut identity = services.identity.lock().await;
     identity.enable_passphrase(&passphrase).map_err(|_| AppError::VaultLocked)?;
+    sync_guardian_key(&services, &identity).await;
+    Ok(())
+}
+
+/// Turns PIN protection on (mobile only — see `presence`). The system
+/// passcode prompt appears once while this runs.
+///
+/// # Errors
+///
+/// [`AppError::NotReady`] before bootstrap, [`AppError::Unsupported`] where
+/// no presence store exists, [`AppError::InvalidIntent`] for anything but six
+/// digits, [`AppError::VaultLocked`] if locked, cancelled, or re-encryption
+/// failed.
+#[tauri::command]
+pub async fn security_enable_pin(pin: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    if !crate::presence::available() {
+        return Err(AppError::Unsupported { feature: "pin" });
+    }
+    if !crate::presence::is_valid_pin(&pin) {
+        return Err(AppError::InvalidIntent { field: "pin", reason: crate::error::InvalidReason::Malformed });
+    }
+    let services = state.services()?;
+    let mut identity = services.identity.lock().await;
+    if !tokio::task::block_in_place(|| identity.enable_pin(&pin).is_ok()) {
+        return Err(AppError::VaultLocked);
+    }
     sync_guardian_key(&services, &identity).await;
     Ok(())
 }

@@ -146,7 +146,7 @@ fn guardian_event_payload_shapes() {
 
 #[test]
 fn security_status_shape() {
-    insta::assert_snapshot!(shape(&SecurityStatus { locked: false, passphrase_enabled: true }));
+    insta::assert_snapshot!(shape(&SecurityStatus { locked: false, passphrase_enabled: true, pin_enabled: false, pin_available: false }));
 }
 
 // ---------------------------------------------------------------------------

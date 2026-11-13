@@ -37,4 +37,20 @@ class KeystorePlugin(private val activity: Activity) : Plugin(activity) {
             invoke.reject(error.message ?: "the Android Keystore refused")
         }
     }
+
+    @Command
+    fun presenceAvailable(invoke: Invoke) {
+        invoke.resolve(JSObject().apply { put("available", PresenceSecret.isSupported(activity)) })
+    }
+
+    @Command
+    fun presenceSecret(invoke: Invoke) {
+        PresenceSecret.request(
+            activity,
+            onSecret = { secret ->
+                invoke.resolve(JSObject().apply { put("secret", Base64.encodeToString(secret, Base64.NO_WRAP)) })
+            },
+            onError = { message -> invoke.reject(message) },
+        )
+    }
 }

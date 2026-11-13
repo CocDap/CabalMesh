@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { MeshUnlock } from "./guardians";
 import { Button, Field, Input, Logo } from "../ds";
 import { errorCopy } from "../state/errorCopy";
+import type { SecurityStatus } from "../types/bindings";
 
 /**
  * Shown instead of Home when `security_status` reports the vault locked.
@@ -14,6 +15,14 @@ import { errorCopy } from "../state/errorCopy";
  */
 export function Unlock({ onUnlocked }: { onUnlocked: () => void }) {
   const [passphrase, setPassphrase] = useState("");
+  const [pin, setPin] = useState(false);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    invoke<SecurityStatus>("security_status")
+      .then((status) => setPin(status.pinEnabled))
+      .catch(() => setPin(false));
+  }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -69,7 +78,7 @@ export function Unlock({ onUnlocked }: { onUnlocked: () => void }) {
             textTransform: "uppercase",
           }}
         >
-          Enter the passphrase to open it.
+          {pin ? "Enter your PIN. Your screen lock is asked next." : "Enter the passphrase to open it."}
         </p>
       </div>
 
@@ -80,10 +89,12 @@ export function Unlock({ onUnlocked }: { onUnlocked: () => void }) {
         }}
         style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)", width: "100%", maxWidth: 320 }}
       >
-        <Field label="PASSPHRASE" htmlFor="unlock-passphrase" error={error ?? undefined}>
+        <Field label={pin ? "PIN" : "PASSPHRASE"} htmlFor="unlock-passphrase" error={error ?? undefined}>
           <Input
             id="unlock-passphrase"
             type="password"
+            inputMode={pin ? "numeric" : undefined}
+            maxLength={pin ? 6 : undefined}
             autoComplete="current-password"
             autoFocus
             invalid={!!error}

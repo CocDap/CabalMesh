@@ -44,6 +44,7 @@
     "allow-preview-intent",
     "allow-profile-summary",
     "allow-security-disable-passphrase",
+    "allow-security-enable-pin",
     "allow-security-enable-passphrase",
     "allow-security-status",
     "allow-security-unlock",
