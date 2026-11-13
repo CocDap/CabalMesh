@@ -259,6 +259,63 @@ impl IdentityStore {
         self.get_identity_views()
     }
 
+    /// The vault's contents, serialized, for guardians to hold as a
+    /// restore backup (wrapped by `GuardianService` before it leaves).
+    ///
+    /// # Errors
+    ///
+    /// The vault is locked.
+    pub fn backup_plaintext(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        if self.locked {
+            return Err("the vault is locked".into());
+        }
+        Ok(serde_json::to_vec(&self.identities)?)
+    }
+
+    /// Replaces this device's vault with one restored from guardians.
+    ///
+    /// The restored records are written under a fresh file-backed key —
+    /// whatever protected them on the lost device does not exist here — and
+    /// the unlock mode reset to `File`; the person can turn a passphrase
+    /// back on from `SECURITY`. The vault being replaced is kept beside it
+    /// as `vault.enc.pre-restore-<unix time>` together with its key, never
+    /// deleted, since the UI's "export it first" warning can be ignored.
+    ///
+    /// # Errors
+    ///
+    /// `plaintext` is not a vault's contents, or a write failed.
+    pub fn adopt_restored(&mut self, plaintext: &[u8]) -> Result<Vec<IdentityView>, Box<dyn Error>> {
+        let records: Vec<IdentityRecord> = serde_json::from_slice(plaintext)?;
+        if records.is_empty() {
+            return Err("the restored vault holds no identities".into());
+        }
+
+        let stamp = chrono::Utc::now().timestamp();
+        for path in [&self.vault_path, &self.vault_key_path, &self.vault_salt_path] {
+            if path.exists() {
+                let mut kept = path.clone().into_os_string();
+                kept.push(format!(".pre-restore-{stamp}"));
+                fs::rename(path, PathBuf::from(kept))?;
+            }
+        }
+
+        let provider = crate::vault_key::platform_provider(self.vault_key_path.clone());
+        let new_vault = Vault::new(self.vault_path.clone(), Box::new(provider) as Box<dyn cabal_vault::KeyProvider>);
+        new_vault.save(&records)?;
+        let round_tripped: Vec<IdentityRecord> = new_vault.load()?;
+        if round_tripped != records {
+            return Err("restored vault did not read back identically".into());
+        }
+
+        self.identity_vault = new_vault;
+        self.identities = records;
+        self.locked = false;
+        crate::security_state::SecurityState { mode: crate::security_state::UnlockMode::File }
+            .save(&DocumentStore::new(self.security_state_path.clone()))?;
+        self.ensure_near_keys()?;
+        self.get_identity_views()
+    }
+
     /// Turns passphrase protection on: re-encrypts the vault under a key
     /// derived from `passphrase`, deletes the file-backed key it replaces,
     /// and persists the switch so the next launch asks for the passphrase.
@@ -681,6 +738,39 @@ mod security_tests {
         assert_eq!(views.len(), original.len());
 
         std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    #[test]
+    fn a_restored_vault_replaces_the_current_one_and_keeps_the_old_beside_it() {
+        let lost_dir = tempfile::TempDir::new().unwrap();
+        let mut lost = bridge_from_disk(&lost_dir.path().to_path_buf());
+        lost.generate_new_identity("Lost".to_string(), "🦊".to_string()).unwrap();
+        let backup = lost.backup_plaintext().unwrap();
+
+        // A new device: auto-created its own wallet, and is passphrase-locked.
+        let new_dir = tempfile::TempDir::new().unwrap();
+        let mut fresh = bridge_from_disk(&new_dir.path().to_path_buf());
+        fresh.enable_passphrase("hunter2222").unwrap();
+        let mut fresh = bridge_from_disk(&new_dir.path().to_path_buf());
+        assert!(fresh.is_locked());
+
+        fresh.adopt_restored(&backup).unwrap();
+        assert!(!fresh.is_locked());
+        assert_eq!(fresh.identities, lost.identities);
+        assert_eq!(fresh.security_mode(), crate::security_state::UnlockMode::File);
+        let kept = std::fs::read_dir(new_dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("vault.enc.pre-restore-"))
+            .count();
+        assert_eq!(kept, 1, "the replaced vault must be kept, not deleted");
+
+        // Survives a restart with no input.
+        let restarted = bridge_from_disk(&new_dir.path().to_path_buf());
+        assert!(!restarted.is_locked());
+        assert_eq!(restarted.identities, lost.identities);
+
+        assert!(fresh.adopt_restored(b"not a vault").is_err());
     }
 
     #[test]

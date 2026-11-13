@@ -89,6 +89,43 @@ use tauri::{Manager, Emitter};
 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Surfaces a guardian notice: an event for the screen that is open, and a
+/// system notification for when none is — a restore of this vault running
+/// somewhere else is exactly the moment the person may not be looking.
+fn guardian_notify<R: tauri::Runtime>(app: &tauri::AppHandle<R>, notice: guardian_actor::GuardianNotice) {
+    use tauri_plugin_notification::NotificationExt;
+    match notice {
+        guardian_actor::GuardianNotice::Approval { id, kind, from, enrolled_at } => {
+            let restore = kind == guardian_actor::ApprovalKind::Restore;
+            let prompt = bindings::GuardianUnlockPrompt {
+                id,
+                from: cabal_core::NodeId::new(from.to_string()).truncated(),
+                kind: if restore { bindings::GuardianPromptKind::Restore } else { bindings::GuardianPromptKind::Unlock },
+                enrolled_at: enrolled_at.map(|at| at.to_rfc3339()),
+            };
+            let _ = app.emit("guardian-unlock-request", prompt);
+            let body = if restore {
+                "A new device asks to restore a vault you guard. Approve only if you can see its owner."
+            } else {
+                "A node asks you to help open their vault. Approve only if you can see them."
+            };
+            let _ = app.notification().builder().title("CabalMesh — guardian request").body(body).show();
+        }
+        guardian_actor::GuardianNotice::RestorePending { release_at } => {
+            let _ = app.emit(
+                "guardian-restore-pending",
+                bindings::GuardianRestorePendingNotice { release_at: release_at.to_rfc3339() },
+            );
+            let _ = app
+                .notification()
+                .builder()
+                .title("CabalMesh — restore in progress")
+                .body("Someone is restoring your vault on another device. If this isn't you, open CabalMesh and cancel it.")
+                .show();
+        }
+    }
+}
+
 pub fn run() {
     // First thing, before anything can emit: on a device this is the only
     // channel that reaches a developer, so nothing useful is logged until it
@@ -97,6 +134,9 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // A guardian approval or a restore-in-progress warning has to reach
+        // the person even when the app is not in front.
+        .plugin(tauri_plugin_notification::init())
         // Registers the JNI handle only. Nothing here is reachable over IPC —
         // see src/multicast.rs for why the webview gets no grant for it.
         .plugin(multicast::init())
@@ -236,7 +276,7 @@ pub fn run() {
                             match guardian_events.recv().await {
                                 Ok(ble::BleEvent::Received { from, kind: cabal_ble::wire::PacketKind::Guardian, payload }) => {
                                     if let Ok(message) = cabal_guardian::protocol::GuardianMessage::from_bytes(&payload) {
-                                        if let Some(id) = guardian_actor::respond_to_guardian_traffic(
+                                        if let Some(notice) = guardian_actor::respond_to_guardian_traffic(
                                             &guardian_state,
                                             &guardian_ble,
                                             &guardian_approvals_for_task,
@@ -245,21 +285,46 @@ pub fn run() {
                                         )
                                         .await
                                         {
-                                            // A human has to see and act on
-                                            // this — see `PendingApprovals`'s
-                                            // docs for why nothing here sends
-                                            // a reply on its own.
-                                            let prompt = bindings::GuardianUnlockPrompt {
-                                                id,
-                                                from: cabal_core::NodeId::new(from.to_string()).truncated(),
-                                            };
-                                            let _ = guardian_app_handle.emit("guardian-unlock-request", prompt);
+                                            guardian_notify(&guardian_app_handle, notice);
                                         }
                                     }
                                 }
                                 Ok(_) => {}
                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                    });
+
+                    // Guardian side: keep announcing restores this device is
+                    // holding, so the original device hears about one even if
+                    // it only comes into range partway through the delay.
+                    let announce_ble = handle.clone();
+                    let announce_state = Arc::clone(&guardian_service);
+                    tokio::spawn(async move {
+                        loop {
+                            tokio::time::sleep(guardian::ANNOUNCE_INTERVAL).await;
+                            guardian_actor::announce_pending_restores(&announce_state, &announce_ble).await;
+                        }
+                    });
+
+                    // Owner side: keep guardians' backup copies and value flag
+                    // current. Does nothing until a restore-capable enrollment
+                    // exists, or while the vault is locked.
+                    let backup_ble = handle.clone();
+                    let backup_guardian = Arc::clone(&guardian_service);
+                    let backup_identity = Arc::clone(&identity);
+                    let backup_state = state.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            tokio::time::sleep(guardian::BACKUP_REFRESH_INTERVAL).await;
+                            let plaintext = { backup_identity.lock().await.backup_plaintext().ok() };
+                            let Some(plaintext) = plaintext else { continue };
+                            let has_value = commands::vault_has_value(&backup_state).await;
+                            if let Err(error) =
+                                guardian_actor::broadcast_backup_update(&backup_guardian, &backup_ble, &plaintext, has_value).await
+                            {
+                                tracing::warn!(target: "cabalmesh::guardian", %error, "backup refresh failed");
                             }
                         }
                     });
@@ -521,6 +586,11 @@ pub fn run() {
             commands::guardian_request_unlock,
             commands::guardian_approve_unlock,
             commands::guardian_deny_unlock,
+            commands::guardian_cancel_restore,
+            commands::guardian_restore_abandon,
+            commands::guardian_restore_code,
+            commands::guardian_restore_poll,
+            commands::guardian_restore_start,
             commands::profile_summary,
             commands::network_set,
             commands::set_offline_mode,

@@ -3035,6 +3035,11 @@ pub struct GuardianStatus {
     pub threshold: u8,
     /// How many other owners this device holds a share for.
     pub holding_for: usize,
+    /// Whether the current enrollment supports restoring onto a new device
+    /// (enrollments made before restore existed do not — re-enroll).
+    pub restore_ready: bool,
+    /// Whether shares held for others are readable (false while locked).
+    pub holding_unlocked: bool,
 }
 
 /// # Errors
@@ -3050,6 +3055,8 @@ pub async fn guardian_status(state: State<'_, AppState>) -> Result<GuardianStatu
         guardian_count,
         threshold,
         holding_for: service.held_for().len(),
+        restore_ready: service.owner_restore_code().is_some(),
+        holding_unlocked: service.is_held_unlocked(),
     })
 }
 
@@ -3078,8 +3085,10 @@ pub struct GuardianEnrollResult {
 pub async fn guardian_enroll(
     peer_ids: Vec<String>,
     threshold: u8,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<GuardianEnrollResult, AppError> {
+    use tauri::Emitter;
     let services = state.services()?;
     let ble = services.ble.as_ref().ok_or(AppError::MeshOffline)?;
 
@@ -3089,20 +3098,184 @@ pub async fn guardian_enroll(
         .collect::<Result<_, _>>()
         .map_err(|_| AppError::InvalidIntent { field: "peer_ids", reason: crate::error::InvalidReason::Malformed })?;
 
-    let vault_key = {
+    let (vault_key, backup) = {
         let identity = services.identity.lock().await;
-        identity.current_vault_key().map_err(|_| AppError::VaultLocked)?
+        (
+            identity.current_vault_key().map_err(|_| AppError::VaultLocked)?,
+            identity.backup_plaintext().map_err(|_| AppError::VaultLocked)?,
+        )
+    };
+    let has_value = vault_has_value(&state).await;
+
+    let progress = move |peer: cabal_ble::PeerId, stage: crate::guardian_actor::EnrollStage| {
+        use crate::bindings::GuardianEnrollStage as S;
+        use crate::guardian_actor::EnrollStage as E;
+        let stage = match stage {
+            E::Invited => S::Invited,
+            E::Accepted => S::Accepted,
+            E::Delivered => S::Delivered,
+            E::NoReply => S::NoReply,
+        };
+        let _ = app.emit("guardian-enroll-progress", crate::bindings::GuardianEnrollProgress { peer_id: peer.to_string(), stage });
     };
 
     let events = ble.subscribe();
-    let outcome = crate::guardian_actor::enroll_guardians(&services.guardian, ble, events, &candidates, threshold, &vault_key)
-        .await
-        .map_err(AppError::internal)?;
+    let outcome = crate::guardian_actor::enroll_guardians(
+        &services.guardian,
+        ble,
+        events,
+        &candidates,
+        threshold,
+        &vault_key,
+        &backup,
+        has_value,
+        &progress,
+    )
+    .await
+    .map_err(AppError::internal)?;
 
     Ok(GuardianEnrollResult {
         enrolled: outcome.enrolled.iter().map(ToString::to_string).collect(),
         no_reply: outcome.no_reply.iter().map(ToString::to_string).collect(),
     })
+}
+
+/// Whether the vault holds anything worth delaying a restore for. Unknown
+/// counts as yes: this only ever *waives* the delay.
+pub(crate) async fn vault_has_value(state: &AppState) -> bool {
+    !cached_balances(state).await.is_known_empty(crate::guardian::DUST_YOCTO)
+}
+
+/// The restore code for the current enrollment, to show the person once
+/// more. `None` before a restore-capable enrollment.
+///
+/// # Errors
+///
+/// [`AppError::NotReady`] before bootstrap, [`AppError::VaultLocked`] while
+/// locked — the code is only shown to someone who could open the vault.
+#[tauri::command]
+pub async fn guardian_restore_code(state: State<'_, AppState>) -> Result<Option<String>, AppError> {
+    let services = state.services()?;
+    if services.identity.lock().await.is_locked() {
+        return Err(AppError::VaultLocked);
+    }
+    let code = services.guardian.lock().await.owner_restore_code();
+    Ok(code)
+}
+
+/// The veto: cancels every restore of this device's vault that guardians in
+/// range are holding.
+///
+/// # Errors
+///
+/// [`AppError::NotReady`] before bootstrap, [`AppError::MeshOffline`]
+/// without a BLE plane, [`AppError::Internal`] without a restore-capable
+/// enrollment.
+#[tauri::command]
+pub async fn guardian_cancel_restore(state: State<'_, AppState>) -> Result<(), AppError> {
+    let services = state.services()?;
+    let ble = services.ble.as_ref().ok_or(AppError::MeshOffline)?;
+    crate::guardian_actor::broadcast_restore_cancel(&services.guardian, ble).await.map_err(AppError::internal)
+}
+
+/// How long one restore round listens for guardian replies.
+const RESTORE_ROUND_WINDOW: std::time::Duration = std::time::Duration::from_secs(8);
+
+fn restore_session_vault() -> cabal_vault::Vault<crate::vault_key::FileKeyProvider> {
+    let dir = crate::app_paths::data_dir();
+    cabal_vault::Vault::new(
+        dir.join("restore_session.enc"),
+        crate::vault_key::platform_provider(dir.join("restore_session.key")),
+    )
+}
+
+fn load_restore_session() -> Option<crate::guardian::RestoreSession> {
+    let vault = restore_session_vault();
+    if !vault.exists() {
+        return None;
+    }
+    let bytes: Vec<u8> = vault.load().ok()?;
+    crate::guardian::RestoreSession::from_bytes(&bytes).ok()
+}
+
+fn clear_restore_session() {
+    let dir = crate::app_paths::data_dir();
+    let _ = std::fs::remove_file(dir.join("restore_session.enc"));
+    let _ = std::fs::remove_file(dir.join("restore_session.key"));
+}
+
+/// Starts restoring onto this device from the restore code. Persists the
+/// attempt — guardians approve *this* attempt, and the delay runs against
+/// it — then runs a first round. Starting again replaces any attempt in
+/// progress.
+///
+/// # Errors
+///
+/// [`AppError::InvalidIntent`] for a code that does not parse, plus
+/// whatever [`guardian_restore_poll`] returns.
+#[tauri::command]
+pub async fn guardian_restore_start(code: String, state: State<'_, AppState>) -> Result<crate::bindings::GuardianRestoreProgress, AppError> {
+    let session = crate::guardian::RestoreSession::new(&code)
+        .map_err(|_| AppError::InvalidIntent { field: "code", reason: crate::error::InvalidReason::Malformed })?;
+    restore_session_vault().save(&session.to_bytes()).map_err(AppError::internal)?;
+    guardian_restore_poll(state).await
+}
+
+/// One more round of the restore in progress. Call periodically while the
+/// restore screen is open; it completes — replacing the vault — as soon as
+/// enough guardians have released their shares.
+///
+/// # Errors
+///
+/// [`AppError::NotReady`] before bootstrap, [`AppError::MeshOffline`]
+/// without a BLE plane, [`AppError::Internal`] if the shares released do
+/// not open a backup or the vault could not be written.
+#[tauri::command]
+pub async fn guardian_restore_poll(state: State<'_, AppState>) -> Result<crate::bindings::GuardianRestoreProgress, AppError> {
+    use crate::bindings::{GuardianRestoreProgress, GuardianRestoreState};
+    let services = state.services()?;
+    let Some(session) = load_restore_session() else {
+        return Ok(GuardianRestoreProgress {
+            state: GuardianRestoreState::None,
+            released: 0,
+            threshold: 0,
+            waiting: 0,
+            waiting_until: None,
+            cancelled: 0,
+        });
+    };
+    let ble = services.ble.as_ref().ok_or(AppError::MeshOffline)?;
+    let round = crate::guardian_actor::restore_round(&session, ble, ble.subscribe(), RESTORE_ROUND_WINDOW).await;
+
+    let threshold = round.released.iter().map(|r| r.threshold).max().unwrap_or(0);
+    let mut progress = GuardianRestoreProgress {
+        state: GuardianRestoreState::Collecting,
+        released: u32::try_from(round.released.len()).unwrap_or(u32::MAX),
+        threshold: u32::from(threshold),
+        waiting: u32::try_from(round.waiting.len()).unwrap_or(u32::MAX),
+        waiting_until: round.waiting.iter().min().map(chrono::DateTime::to_rfc3339),
+        cancelled: u32::try_from(round.cancelled).unwrap_or(u32::MAX),
+    };
+
+    if threshold > 0 && round.released.len() >= usize::from(threshold) {
+        let plaintext = session.finish(&round.released).map_err(AppError::internal)?;
+        let mut identity = services.identity.lock().await;
+        identity
+            .adopt_restored(&plaintext)
+            .map_err(|error| AppError::internal(std::io::Error::other(error.to_string())))?;
+        sync_guardian_key(&services, &identity).await;
+        drop(identity);
+        clear_restore_session();
+        progress.state = GuardianRestoreState::Done;
+    }
+    Ok(progress)
+}
+
+/// Abandons the restore in progress. Guardians' approvals for it lapse.
+#[tauri::command]
+pub async fn guardian_restore_abandon() -> Result<(), AppError> {
+    clear_restore_session();
+    Ok(())
 }
 
 /// Broadcasts an unlock request, waits for enough guardians to answer, and —
@@ -3141,7 +3314,7 @@ pub async fn guardian_request_unlock(state: State<'_, AppState>) -> Result<(), A
 pub async fn guardian_approve_unlock(id: u32, state: State<'_, AppState>) -> Result<(), AppError> {
     let services = state.services()?;
     let ble = services.ble.as_ref().ok_or(AppError::MeshOffline)?;
-    crate::guardian_actor::approve_unlock(&services.guardian_approvals, ble, id).await.map_err(AppError::internal)
+    crate::guardian_actor::approve(&services.guardian_approvals, &services.guardian, ble, id).await.map_err(AppError::internal)
 }
 
 /// Discards a pending unlock reply without sending anything.
@@ -3153,5 +3326,5 @@ pub async fn guardian_approve_unlock(id: u32, state: State<'_, AppState>) -> Res
 #[tauri::command]
 pub async fn guardian_deny_unlock(id: u32, state: State<'_, AppState>) -> Result<(), AppError> {
     let services = state.services()?;
-    crate::guardian_actor::deny_unlock(&services.guardian_approvals, id).await.map_err(AppError::internal)
+    crate::guardian_actor::deny(&services.guardian_approvals, id).await.map_err(AppError::internal)
 }

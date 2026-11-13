@@ -30,7 +30,7 @@ use crate::sealed::{GuardianPublicKey, Sealed};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const TAG_LEN: usize = 16;
+pub const TAG_LEN: usize = 16;
 const TAG_DOMAIN: &[u8] = b"cabalmesh-guardian-tag-v1";
 
 /// A one-time, unlinkable stand-in for "this request is meant for you,"
@@ -83,8 +83,27 @@ pub struct EnrollPayload {
     pub owner_recovery_public_key: [u8; 32],
     pub threshold: u8,
     pub total: u8,
-    /// A `cabal_guardian::Share`, serialized via `Share::to_bytes`.
+    /// A `cabal_guardian::Share`, serialized via `Share::to_bytes`. A share
+    /// of the owner's stable *recovery key*, not of the vault key itself, so
+    /// it stays valid when the vault key changes (passphrase on/off).
     pub share: Vec<u8>,
+    /// What a restore request from a new device must be tagged with — see
+    /// `restore::RestoreSecret::lookup`. Absent from pre-restore enrollments.
+    #[serde(default)]
+    pub restore_lookup: Option<[u8; 32]>,
+    /// Authenticates later messages that only the original device may send
+    /// (backup refresh, restore cancel). Never in the restore code.
+    #[serde(default)]
+    pub owner_auth_key: Option<[u8; 32]>,
+    /// The vault backup, wrapped under `RestoreSecret::backup_key`.
+    #[serde(default)]
+    pub backup: Option<Vec<u8>>,
+    #[serde(default)]
+    pub backup_seq: u64,
+    /// Whether the vault held anything worth a restore delay when this was
+    /// sent. `None` (old enrollments) is treated as "yes".
+    #[serde(default)]
+    pub has_value: Option<bool>,
 }
 
 /// Sealed to the owner's recovery public key, sent directed at the
@@ -92,6 +111,87 @@ pub struct EnrollPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnlockReplyPayload {
     pub share: Vec<u8>,
+}
+
+/// Broadcast by a **new** device restoring from guardians. Carries no
+/// identifier: `tag` is `restore::restore_tag(lookup, nonce)`, which only a
+/// guardian holding that owner's `lookup` can recognise. Replies are sealed
+/// to `reply_public_key`, an ephemeral key the new device generated.
+///
+/// Re-broadcast unchanged (same nonce and reply key) while waiting out the
+/// restore delay, so a guardian can recognise it as the request it already
+/// approved and release the share once the delay has passed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreRequest {
+    pub nonce: [u8; TAG_LEN],
+    pub tag: [u8; TAG_LEN],
+    pub reply_public_key: [u8; 32],
+}
+
+/// Sealed to a [`RestoreRequest`]'s `reply_public_key`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreReplyPayload {
+    pub status: RestoreStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum RestoreStatus {
+    /// Approved, but held until `release_at` (unix seconds) so the original
+    /// device has a chance to veto.
+    Waiting { release_at: i64 },
+    /// The share, and this guardian's copy of the vault backup.
+    Released { share: Vec<u8>, threshold: u8, backup: Vec<u8>, backup_seq: u64 },
+    /// The original device vetoed this restore.
+    Cancelled,
+}
+
+/// Broadcast by the owner to refresh what guardians hold. One entry per
+/// guardian, each tagged with [`recognition_tag`] and sealed to that
+/// guardian, so nobody else learns who guards whom or reads the backup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupUpdate {
+    pub nonce: [u8; TAG_LEN],
+    pub entries: Vec<BackupEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupEntry {
+    pub tag: [u8; TAG_LEN],
+    /// A [`Sealed`] [`BackupPayload`], as `Sealed::to_bytes`.
+    pub sealed: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupPayload {
+    pub owner_recovery_public_key: [u8; 32],
+    pub backup: Vec<u8>,
+    pub seq: u64,
+    pub has_value: bool,
+    /// `restore::mac(owner_auth_key, BACKUP_MAC_DOMAIN, [backup, seq, has_value])`.
+    pub mac: [u8; 32],
+}
+
+pub const BACKUP_MAC_DOMAIN: &[u8] = b"cabalmesh/backup-update/v1";
+pub const CANCEL_MAC_DOMAIN: &[u8] = b"cabalmesh/restore-cancel/v1";
+
+/// Broadcast by a guardian while a restore for some owner is waiting out its
+/// delay. `tag` is `restore::pending_tag(owner_auth_key, nonce)`: only the
+/// original device recognises it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestorePending {
+    pub nonce: [u8; TAG_LEN],
+    pub tag: [u8; TAG_LEN],
+    /// Unix seconds, so the original device can say how long it has.
+    pub release_at: i64,
+}
+
+/// Broadcast by the original device to veto every pending restore of its
+/// vault. `mac` is `restore::mac(owner_auth_key, CANCEL_MAC_DOMAIN, [nonce])`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreCancel {
+    pub nonce: [u8; TAG_LEN],
+    pub mac: [u8; 32],
 }
 
 /// One message as it travels inside a `PacketKind::Guardian` payload.
@@ -109,6 +209,11 @@ pub enum GuardianMessage {
     Enroll(Sealed),
     UnlockRequest(UnlockRequest),
     UnlockReply(Sealed),
+    RestoreRequest(RestoreRequest),
+    RestoreReply(Sealed),
+    BackupUpdate(BackupUpdate),
+    RestorePending(RestorePending),
+    RestoreCancel(RestoreCancel),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -128,6 +233,11 @@ impl GuardianMessage {
     const ENROLL: u8 = 0x02;
     const UNLOCK_REQUEST: u8 = 0x03;
     const UNLOCK_REPLY: u8 = 0x04;
+    const RESTORE_REQUEST: u8 = 0x05;
+    const RESTORE_REPLY: u8 = 0x06;
+    const BACKUP_UPDATE: u8 = 0x07;
+    const RESTORE_PENDING: u8 = 0x08;
+    const RESTORE_CANCEL: u8 = 0x09;
 
     /// Serializes to `[type byte][message bytes]`, ready to send as a
     /// `PacketKind::Guardian` payload.
@@ -148,6 +258,11 @@ impl GuardianMessage {
                 serde_json::to_vec(request).expect("UnlockRequest has no reason to fail to serialize"),
             ),
             Self::UnlockReply(sealed) => prefix(Self::UNLOCK_REPLY, sealed.to_bytes()),
+            Self::RestoreRequest(m) => prefix(Self::RESTORE_REQUEST, json(m)),
+            Self::RestoreReply(sealed) => prefix(Self::RESTORE_REPLY, sealed.to_bytes()),
+            Self::BackupUpdate(m) => prefix(Self::BACKUP_UPDATE, json(m)),
+            Self::RestorePending(m) => prefix(Self::RESTORE_PENDING, json(m)),
+            Self::RestoreCancel(m) => prefix(Self::RESTORE_CANCEL, json(m)),
         }
     }
 
@@ -173,9 +288,24 @@ impl GuardianMessage {
             Self::UNLOCK_REPLY => {
                 Ok(Self::UnlockReply(Sealed::from_bytes(rest).map_err(|_| ProtocolError::Malformed)?))
             }
+            Self::RESTORE_REQUEST => Ok(Self::RestoreRequest(parse(rest)?)),
+            Self::RESTORE_REPLY => {
+                Ok(Self::RestoreReply(Sealed::from_bytes(rest).map_err(|_| ProtocolError::Malformed)?))
+            }
+            Self::BACKUP_UPDATE => Ok(Self::BackupUpdate(parse(rest)?)),
+            Self::RESTORE_PENDING => Ok(Self::RestorePending(parse(rest)?)),
+            Self::RESTORE_CANCEL => Ok(Self::RestoreCancel(parse(rest)?)),
             other => Err(ProtocolError::UnknownMessageType(other)),
         }
     }
+}
+
+fn json<T: Serialize>(message: &T) -> Vec<u8> {
+    serde_json::to_vec(message).expect("guardian messages have no reason to fail to serialize")
+}
+
+fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, ProtocolError> {
+    serde_json::from_slice(bytes).map_err(|_| ProtocolError::Malformed)
 }
 
 fn prefix(tag: u8, mut body: Vec<u8>) -> Vec<u8> {
@@ -262,6 +392,11 @@ mod tests {
             threshold: 3,
             total: 5,
             share: vec![1, 2, 3, 4],
+            restore_lookup: None,
+            owner_auth_key: None,
+            backup: None,
+            backup_seq: 0,
+            has_value: None,
         };
         let sealed = crate::sealed::seal(&serde_json::to_vec(&payload).unwrap(), &guardian.public_key());
         let message = GuardianMessage::Enroll(sealed);
@@ -287,5 +422,27 @@ mod tests {
             GuardianMessage::from_bytes(&[0xff, 1, 2, 3]),
             Err(ProtocolError::UnknownMessageType(0xff))
         ));
+    }
+
+    #[test]
+    fn restore_messages_round_trip_through_bytes() {
+        let request = GuardianMessage::RestoreRequest(RestoreRequest { nonce: [1; TAG_LEN], tag: [2; TAG_LEN], reply_public_key: [3; 32] });
+        assert!(matches!(GuardianMessage::from_bytes(&request.to_bytes()), Ok(GuardianMessage::RestoreRequest(r)) if r.reply_public_key == [3; 32]));
+
+        let pending = GuardianMessage::RestorePending(RestorePending { nonce: [1; TAG_LEN], tag: [2; TAG_LEN], release_at: 99 });
+        assert!(matches!(GuardianMessage::from_bytes(&pending.to_bytes()), Ok(GuardianMessage::RestorePending(p)) if p.release_at == 99));
+
+        let cancel = GuardianMessage::RestoreCancel(RestoreCancel { nonce: [1; TAG_LEN], mac: [4; 32] });
+        assert!(matches!(GuardianMessage::from_bytes(&cancel.to_bytes()), Ok(GuardianMessage::RestoreCancel(c)) if c.mac == [4; 32]));
+
+        let update = GuardianMessage::BackupUpdate(BackupUpdate { nonce: [1; TAG_LEN], entries: vec![BackupEntry { tag: [5; TAG_LEN], sealed: vec![6, 7] }] });
+        assert!(matches!(GuardianMessage::from_bytes(&update.to_bytes()), Ok(GuardianMessage::BackupUpdate(u)) if u.entries.len() == 1));
+    }
+
+    #[test]
+    fn an_enroll_payload_from_before_restore_existed_still_parses() {
+        let old = br#"{"owner_recovery_public_key":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"threshold":2,"total":3,"share":[1]}"#;
+        let parsed: EnrollPayload = serde_json::from_slice(old).unwrap();
+        assert!(parsed.restore_lookup.is_none() && parsed.has_value.is_none());
     }
 }

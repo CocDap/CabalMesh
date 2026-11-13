@@ -1,0 +1,12 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&GuardianRestoreProgress\n{\n    state: GuardianRestoreState::Collecting, released: 1, threshold: 3,\n    waiting: 2, waiting_until: Some(\"2026-08-03T14:02:00+00:00\".into()),\n    cancelled: 0,\n})"
+---
+{
+  "state": "collecting",
+  "released": 1,
+  "threshold": 3,
+  "waiting": 2,
+  "waitingUntil": "2026-08-03T14:02:00+00:00",
+  "cancelled": 0
+}

@@ -1,0 +1,7 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&GuardianRestorePendingNotice\n{ release_at: \"2026-08-03T14:02:00+00:00\".into() })"
+---
+{
+  "releaseAt": "2026-08-03T14:02:00+00:00"
+}

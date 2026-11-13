@@ -34,6 +34,7 @@
 #![forbid(unsafe_code)]
 
 pub mod protocol;
+pub mod restore;
 pub mod sealed;
 
 use cabal_vault::DataKey;

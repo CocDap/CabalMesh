@@ -117,9 +117,61 @@ peerId: string,
 label: string, hops: number, };
 
 /**
+ * Payload for `guardian-enroll-progress`, driving `DISTRIBUTING SHARES`.
+ */
+export type GuardianEnrollProgress = { peerId: string, stage: GuardianEnrollStage, };
+
+/**
  * Who accepted an enrollment invitation, and who did not answer.
  */
 export type GuardianEnrollResult = { enrolled: Array<string>, noReply: Array<string>, };
+
+export type GuardianEnrollStage = "invited" | "accepted" | "delivered" | "no-reply";
+
+export type GuardianPromptKind = "unlock" | "restore";
+
+/**
+ * Payload for `guardian-restore-pending`: a guardian is holding a restore
+ * of *this* device's vault. If the person did not start it, they veto with
+ * `guardian_cancel_restore`.
+ */
+export type GuardianRestorePendingNotice = { 
+/**
+ * RFC 3339.
+ */
+releaseAt: string, };
+
+/**
+ * Where a restore onto this (new) device stands.
+ */
+export type GuardianRestoreProgress = { 
+/**
+ * `none`: no restore in progress. `collecting`: asking guardians.
+ * `done`: the vault was replaced.
+ */
+state: GuardianRestoreState, 
+/**
+ * Shares released in the latest round.
+ */
+released: number, 
+/**
+ * Shares needed; 0 until a guardian has released one and said.
+ */
+threshold: number, 
+/**
+ * Guardians that approved and are waiting out the delay.
+ */
+waiting: number, 
+/**
+ * RFC 3339: the earliest moment a waiting guardian releases.
+ */
+waitingUntil: string | null, 
+/**
+ * Guardians that report the original device vetoed this restore.
+ */
+cancelled: number, };
+
+export type GuardianRestoreState = "none" | "collecting" | "done";
 
 /**
  * What `SECURITY` shows about the guardian scheme, in both roles this
@@ -129,7 +181,16 @@ export type GuardianStatus = { enrolled: boolean, guardianCount: number, thresho
 /**
  * How many other owners this device holds a share for.
  */
-holdingFor: number, };
+holdingFor: number, 
+/**
+ * Whether the current enrollment supports restoring onto a new device
+ * (enrollments made before restore existed do not — re-enroll).
+ */
+restoreReady: boolean, 
+/**
+ * Whether shares held for others are readable (false while locked).
+ */
+holdingUnlocked: boolean, };
 
 /**
  * Payload for the `guardian-unlock-request` event: this device's own tag
@@ -140,7 +201,19 @@ holdingFor: number, };
  * show. It is exactly as anonymous to this screen as the mesh itself keeps
  * everyone by default.
  */
-export type GuardianUnlockPrompt = { id: number, from: string, };
+export type GuardianUnlockPrompt = { id: number, from: string, 
+/**
+ * `unlock`: an enrolled device asking to open its own vault.
+ * `restore`: a *new* device rebuilding someone's vault — riskier, and
+ * approving starts a delay the original device can veto.
+ */
+kind: GuardianPromptKind, 
+/**
+ * RFC 3339; when this device became a guardian for the owner asking.
+ * Only known for restores, whose request identifies the owner to this
+ * device (and only to this device).
+ */
+enrolledAt: string | null, };
 
 /**
  * Everything the detail screen renders.

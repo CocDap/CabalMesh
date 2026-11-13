@@ -14,14 +14,18 @@ use cabal_ble::PeerId;
 use cabal_guardian::protocol::GuardianMessage;
 use cabal_vault::DataKey;
 use cabalmesh_lib::ble::{self, link::LoopbackTransport, BleEvent, BleHandle};
-use cabalmesh_lib::guardian::GuardianService;
-use cabalmesh_lib::guardian_actor::{approve_unlock, enroll_guardians, request_unlock, respond_to_guardian_traffic, PendingApprovals};
+use cabalmesh_lib::guardian::{GuardianService, RestoreSession};
+use cabalmesh_lib::guardian_actor::{
+    approve, enroll_guardians, request_unlock, respond_to_guardian_traffic, restore_round, GuardianNotice, PendingApprovals,
+};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
+
+const BACKUP: &[u8] = b"[\"vault contents\"]";
 
 fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -63,10 +67,10 @@ fn spawn_node(port: u16, peers: &[u16], guardian_dir: &Path) -> (BleHandle, Arc<
                         // to prove the wire protocol and the gate's plumbing
                         // both work — a human declining is not a networking
                         // question this file is responsible for testing.
-                        if let Some(id) =
+                        if let Some(GuardianNotice::Approval { id, .. }) =
                             respond_to_guardian_traffic(&responder_service, &responder_ble, &approvals, from, message).await
                         {
-                            let _ = approve_unlock(&approvals, &responder_ble, id).await;
+                            let _ = approve(&approvals, &responder_service, &responder_ble, id).await;
                         }
                     }
                 }
@@ -101,7 +105,7 @@ async fn enrolling_and_unlocking_across_a_simulated_session_restart() {
     assert_eq!(candidates.len(), 3, "owner should see all three guardian candidates");
 
     let owner_events = owner_ble.subscribe();
-    let outcome = enroll_guardians(&owner_service, &owner_ble, owner_events, &candidates, 2, &vault_key)
+    let outcome = enroll_guardians(&owner_service, &owner_ble, owner_events, &candidates, 2, &vault_key, BACKUP, true, &|_, _| {})
         .await
         .expect("enrollment should succeed");
 
@@ -152,7 +156,7 @@ async fn unlock_fails_when_fewer_than_the_threshold_are_reachable() {
 
     let candidates: Vec<PeerId> = owner_ble.peers().await.expect("owner peers").iter().map(|p| p.id).collect();
     let owner_events = owner_ble.subscribe();
-    enroll_guardians(&owner_service, &owner_ble, owner_events, &candidates, 3, &vault_key)
+    enroll_guardians(&owner_service, &owner_ble, owner_events, &candidates, 3, &vault_key, BACKUP, true, &|_, _| {})
         .await
         .expect("enrollment should succeed");
 
@@ -166,4 +170,40 @@ async fn unlock_fails_when_fewer_than_the_threshold_are_reachable() {
     let owner_events_2 = owner_ble_2.subscribe();
     let result = request_unlock(&owner_service_2, &owner_ble_2, owner_events_2).await;
     assert!(result.is_err(), "unlock must not succeed with fewer than the threshold answering");
+}
+
+#[tokio::test]
+async fn a_brand_new_device_restores_with_only_the_code() {
+    let owner_dir = TempDir::new().unwrap();
+    let guardian_dirs: Vec<TempDir> = (0..3).map(|_| TempDir::new().unwrap()).collect();
+
+    let port_owner = free_port();
+    let (owner_ble, owner_service) = spawn_node(port_owner, &[], owner_dir.path());
+    for dir in &guardian_dirs {
+        spawn_node(free_port(), &[port_owner], dir.path());
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let candidates: Vec<PeerId> = owner_ble.peers().await.expect("owner peers").iter().map(|p| p.id).collect();
+    // An empty vault: no delay, so the release happens inside this test.
+    // The delay itself is covered against a fake clock in `guardian.rs`.
+    enroll_guardians(&owner_service, &owner_ble, owner_ble.subscribe(), &candidates, 2, &DataKey::from_bytes([3; 32]), BACKUP, false, &|_, _| {})
+        .await
+        .expect("enrollment should succeed");
+    let code = owner_service.lock().await.owner_restore_code().expect("restore-capable enrollment");
+
+    // The owner's device is gone. A new device with an empty data dir and
+    // only the code, near two of the three guardians.
+    let new_dir = TempDir::new().unwrap();
+    let port_new = free_port();
+    let (new_ble, _new_service) = spawn_node(port_new, &[], new_dir.path());
+    for dir in guardian_dirs.iter().take(2) {
+        spawn_node(free_port(), &[port_new], dir.path());
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let session = RestoreSession::new(&code).unwrap();
+    let round = restore_round(&session, &new_ble, new_ble.subscribe(), Duration::from_secs(5)).await;
+    assert_eq!(round.released.len(), 2, "both reachable guardians should release");
+    assert_eq!(session.finish(&round.released).unwrap(), BACKUP);
 }
