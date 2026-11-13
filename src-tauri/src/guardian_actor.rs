@@ -392,12 +392,14 @@ pub async fn request_unlock(
     service: &Mutex<GuardianService>,
     ble: &BleHandle,
     mut events: broadcast::Receiver<BleEvent>,
+    on_share: &(dyn Fn(usize, u8) + Send + Sync),
 ) -> Result<DataKey, GuardianServiceError> {
     let (request, threshold) = {
         let service = service.lock().await;
         (service.owner_build_unlock_request()?, service.owner_threshold())
     };
     let _ = ble.broadcast(PacketKind::Guardian, GuardianMessage::UnlockRequest(request).to_bytes()).await;
+    on_share(0, threshold);
 
     let mut shares: Vec<Share> = Vec::new();
     let deadline = Instant::now() + REPLY_TIMEOUT;
@@ -417,6 +419,7 @@ pub async fn request_unlock(
                     };
                     if let Some(share) = opened {
                         shares.push(share);
+                        on_share(shares.len(), threshold);
                     }
                 }
             }

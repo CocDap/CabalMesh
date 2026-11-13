@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { MeshUnlock } from "./guardians";
 import { Button, Field, Input, Logo } from "../ds";
 import { errorCopy } from "../state/errorCopy";
 
@@ -105,6 +106,10 @@ export function Unlock({ onUnlocked }: { onUnlocked: () => void }) {
           {busy ? "UNLOCKING…" : "UNLOCK"}
         </Button>
       </form>
+
+      <div style={{ width: "100%", maxWidth: 320 }}>
+        <MeshUnlock onUnlocked={onUnlocked} />
+      </div>
     </section>
   );
 }

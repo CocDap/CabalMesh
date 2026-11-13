@@ -190,7 +190,18 @@ restoreReady: boolean,
 /**
  * Whether shares held for others are readable (false while locked).
  */
-holdingUnlocked: boolean, };
+holdingUnlocked: boolean, 
+/**
+ * The vault holds real value but nothing backs it up off this device
+ * yet — the moment to suggest guardians (risk-driven, not an
+ * onboarding checklist: an empty wallet is never nagged).
+ */
+suggestBackup: boolean, };
+
+/**
+ * Payload for `guardian-unlock-progress`: everyday mesh unlock, owner side.
+ */
+export type GuardianUnlockProgress = { approved: number, threshold: number, };
 
 /**
  * Payload for the `guardian-unlock-request` event: this device's own tag

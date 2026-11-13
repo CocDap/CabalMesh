@@ -1,0 +1,8 @@
+---
+source: tests/ipc_contract.rs
+expression: "shape(&GuardianEnrollProgress\n{ peer_id: \"7f3a1209c2e100aa\".into(), stage: GuardianEnrollStage::Delivered })"
+---
+{
+  "peerId": "7f3a1209c2e100aa",
+  "stage": "delivered"
+}

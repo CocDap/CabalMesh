@@ -127,7 +127,7 @@ async fn enrolling_and_unlocking_across_a_simulated_session_restart() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let owner_events_2 = owner_ble_2.subscribe();
-    let candidate_key = request_unlock(&owner_service_2, &owner_ble_2, owner_events_2)
+    let candidate_key = request_unlock(&owner_service_2, &owner_ble_2, owner_events_2, &|_, _| {})
         .await
         .expect("unlock should reconstruct the key from two of three guardians");
 
@@ -168,7 +168,7 @@ async fn unlock_fails_when_fewer_than_the_threshold_are_reachable() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let owner_events_2 = owner_ble_2.subscribe();
-    let result = request_unlock(&owner_service_2, &owner_ble_2, owner_events_2).await;
+    let result = request_unlock(&owner_service_2, &owner_ble_2, owner_events_2, &|_, _| {}).await;
     assert!(result.is_err(), "unlock must not succeed with fewer than the threshold answering");
 }
 

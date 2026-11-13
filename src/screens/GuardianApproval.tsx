@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Button } from "../ds";
 import { ModalDialog } from "../shell/ModalDialog";
 import type { GuardianUnlockPrompt } from "../types/bindings";
+import { GUARDIANS_K, RestorePendingAlert } from "./guardians";
 
 /**
  * Mounted once, for the whole app's lifetime — a guardian approval can
@@ -48,8 +49,13 @@ export function GuardianApproval() {
     }
   }
 
+  const restore = prompt?.kind === "restore";
+  const enrolled = prompt?.enrolledAt ? prompt.enrolledAt.slice(0, 10) : null;
+
   return (
-    <ModalDialog open={prompt !== null} title="UNLOCK REQUEST" onClose={() => void resolve("guardian_deny_unlock")}>
+    <>
+    <RestorePendingAlert />
+    <ModalDialog open={prompt !== null} title={restore ? "RESTORE REQUEST" : "UNLOCK REQUEST"} onClose={() => void resolve("guardian_deny_unlock")}>
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)", padding: "var(--space-2) 0" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
           <span
@@ -70,8 +76,20 @@ export function GuardianApproval() {
               color: "var(--text-muted)",
             }}
           >
-            ASKS TO OPEN THEIR VAULT
+            {restore ? "A NEW DEVICE ASKS TO RESTORE A VAULT YOU GUARD" : "ASKS TO OPEN THEIR VAULT"}
           </span>
+          {enrolled && (
+            <span
+              style={{
+                fontFamily: "var(--type-label-family)",
+                fontSize: "var(--text-2xs)",
+                letterSpacing: "var(--tracking-widest)",
+                color: "var(--text-muted)",
+              }}
+            >
+              ENROLLED {enrolled}
+            </span>
+          )}
         </div>
 
         <span
@@ -82,7 +100,9 @@ export function GuardianApproval() {
             color: "var(--accent-blood-red)",
           }}
         >
-          ⚠ APPROVE ONLY IF YOU CAN SEE THEM.
+          {restore
+            ? `⚠ APPROVE ONLY IF THE OWNER IS STANDING IN FRONT OF YOU. APPROVING STARTS A 24-HOUR WAIT THEIR OLD DEVICE CAN CANCEL. YOUR SHARE IS 1 OF ${GUARDIANS_K} NEEDED.`
+            : `⚠ APPROVE ONLY IF YOU CAN SEE THEM. YOUR SHARE IS 1 OF ${GUARDIANS_K} NEEDED.`}
         </span>
 
         <div style={{ display: "flex", gap: "var(--space-4)" }}>
@@ -109,5 +129,6 @@ export function GuardianApproval() {
         </div>
       </div>
     </ModalDialog>
+    </>
   );
 }

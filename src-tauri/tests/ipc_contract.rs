@@ -28,7 +28,7 @@ use cabal_core::Chain;
 use cabal_near::{token_diff_payload, AccountId, NearKeypair, TokenDiff};
 use cabalmesh_lib::bindings::{
     GuardianEnrollProgress, GuardianEnrollStage, GuardianPromptKind, GuardianRestorePendingNotice, GuardianRestoreProgress,
-    GuardianRestoreState, GuardianUnlockPrompt,
+    GuardianRestoreState, GuardianUnlockPrompt, GuardianUnlockProgress,
 };
 use cabalmesh_lib::commands::{
     GuardianCandidate, GuardianEnrollResult, GuardianStatus, NearAccountView, NearTokenView, SecurityStatus,
@@ -103,6 +103,7 @@ fn guardian_status_shape() {
         holding_for: 0,
         restore_ready: true,
         holding_unlocked: true,
+        suggest_backup: false,
     }));
 }
 
@@ -139,6 +140,7 @@ fn guardian_restore_progress_shape() {
 #[test]
 fn guardian_event_payload_shapes() {
     insta::assert_snapshot!(shape(&GuardianRestorePendingNotice { release_at: "2026-08-03T14:02:00+00:00".into() }));
+    insta::assert_snapshot!(shape(&GuardianUnlockProgress { approved: 2, threshold: 3 }));
     insta::assert_snapshot!(shape(&GuardianEnrollProgress { peer_id: "7f3a1209c2e100aa".into(), stage: GuardianEnrollStage::Delivered }));
 }
 

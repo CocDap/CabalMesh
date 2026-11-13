@@ -224,6 +224,15 @@ pub enum GuardianEnrollStage {
     NoReply,
 }
 
+/// Payload for `guardian-unlock-progress`: everyday mesh unlock, owner side.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(TS), ts(export, export_to = "../../src/types/bindings.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct GuardianUnlockProgress {
+    pub approved: u32,
+    pub threshold: u32,
+}
+
 /// Where a restore onto this (new) device stands.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts-rs", derive(TS), ts(export, export_to = "../../src/types/bindings.ts"))]

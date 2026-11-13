@@ -1,8 +1,8 @@
 ---
 source: tests/ipc_contract.rs
-expression: "shape(&GuardianEnrollProgress\n{ peer_id: \"7f3a1209c2e100aa\".into(), stage: GuardianEnrollStage::Delivered })"
+expression: "shape(&GuardianUnlockProgress { approved: 2, threshold: 3 })"
 ---
 {
-  "peerId": "7f3a1209c2e100aa",
-  "stage": "delivered"
+  "approved": 2,
+  "threshold": 3
 }

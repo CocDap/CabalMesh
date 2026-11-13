@@ -3040,6 +3040,10 @@ pub struct GuardianStatus {
     pub restore_ready: bool,
     /// Whether shares held for others are readable (false while locked).
     pub holding_unlocked: bool,
+    /// The vault holds real value but nothing backs it up off this device
+    /// yet — the moment to suggest guardians (risk-driven, not an
+    /// onboarding checklist: an empty wallet is never nagged).
+    pub suggest_backup: bool,
 }
 
 /// # Errors
@@ -3048,6 +3052,7 @@ pub struct GuardianStatus {
 #[tauri::command]
 pub async fn guardian_status(state: State<'_, AppState>) -> Result<GuardianStatus, AppError> {
     let services = state.services()?;
+    let has_value = vault_has_value(&state).await;
     let service = services.guardian.lock().await;
     let (guardian_count, threshold) = service.owner_guardian_status();
     Ok(GuardianStatus {
@@ -3057,6 +3062,7 @@ pub async fn guardian_status(state: State<'_, AppState>) -> Result<GuardianStatu
         holding_for: service.held_for().len(),
         restore_ready: service.owner_restore_code().is_some(),
         holding_unlocked: service.is_held_unlocked(),
+        suggest_backup: has_value && !service.is_enrolled(),
     })
 }
 
@@ -3287,12 +3293,22 @@ pub async fn guardian_restore_abandon() -> Result<(), AppError> {
 /// there is no BLE plane, [`AppError::VaultLocked`] if too few guardians
 /// answered in time or the reconstructed key was wrong.
 #[tauri::command]
-pub async fn guardian_request_unlock(state: State<'_, AppState>) -> Result<(), AppError> {
+pub async fn guardian_request_unlock(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
+    use tauri::Emitter;
     let services = state.services()?;
     let ble = services.ble.as_ref().ok_or(AppError::MeshOffline)?;
 
     let events = ble.subscribe();
-    let candidate = crate::guardian_actor::request_unlock(&services.guardian, ble, events)
+    let progress = move |approved: usize, threshold: u8| {
+        let _ = app.emit(
+            "guardian-unlock-progress",
+            crate::bindings::GuardianUnlockProgress {
+                approved: u32::try_from(approved).unwrap_or(u32::MAX),
+                threshold: u32::from(threshold),
+            },
+        );
+    };
+    let candidate = crate::guardian_actor::request_unlock(&services.guardian, ble, events, &progress)
         .await
         .map_err(|_| AppError::VaultLocked)?;
 

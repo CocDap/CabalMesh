@@ -1,6 +1,6 @@
 ---
 source: tests/ipc_contract.rs
-expression: "shape(&GuardianStatus\n{\n    enrolled: true, guardian_count: 5, threshold: 3, holding_for: 0,\n    restore_ready: true, holding_unlocked: true,\n})"
+expression: "shape(&GuardianStatus\n{\n    enrolled: true, guardian_count: 5, threshold: 3, holding_for: 0,\n    restore_ready: true, holding_unlocked: true, suggest_backup: false,\n})"
 ---
 {
   "enrolled": true,
@@ -8,5 +8,6 @@ expression: "shape(&GuardianStatus\n{\n    enrolled: true, guardian_count: 5, th
   "threshold": 3,
   "holdingFor": 0,
   "restoreReady": true,
-  "holdingUnlocked": true
+  "holdingUnlocked": true,
+  "suggestBackup": false
 }
