@@ -7,7 +7,7 @@
  * downstream matches, and `tag = "kind"` so TypeScript gets a union it can
  * switch on.
  */
-export type AppError = { "kind": "local_storage" } | { "kind": "not_ready", "detail": { subsystem: string, } } | { "kind": "unsupported", "detail": { feature: string, } } | { "kind": "mesh_offline" } | { "kind": "invalid_intent", "detail": { field: string, reason: InvalidReason, } } | { "kind": "chain", "detail": { retryable: boolean, } } | { "kind": "near_account_not_funded", "detail": { account: string, } } | { "kind": "insufficient_native" } | { "kind": "native_transfer_unconfirmed", "detail": { transaction: string | null, } } | { "kind": "vault_locked" } | { "kind": "too_many_subscriptions", "detail": { limit: number, } } | { "kind": "model", "detail": { problem: ModelProblem, } } | { "kind": "internal" };
+export type AppError = { "kind": "local_storage" } | { "kind": "not_ready", "detail": { subsystem: string, } } | { "kind": "unsupported", "detail": { feature: string, } } | { "kind": "mesh_offline" } | { "kind": "invalid_intent", "detail": { field: string, reason: InvalidReason, } } | { "kind": "chain", "detail": { retryable: boolean, } } | { "kind": "near_account_not_funded", "detail": { account: string, } } | { "kind": "insufficient_native" } | { "kind": "native_transfer_unconfirmed", "detail": { transaction: string | null, } } | { "kind": "vault_locked" } | { "kind": "too_many_subscriptions", "detail": { limit: number, } } | { "kind": "too_many_attempts", "detail": { retry_after_secs: bigint, } } | { "kind": "model", "detail": { problem: ModelProblem, } } | { "kind": "internal" };
 
 export type AssetOption = { name: string, 
 /**

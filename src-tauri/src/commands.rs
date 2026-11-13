@@ -2783,7 +2783,14 @@ async fn sync_guardian_key(services: &crate::state::Services, identity: &crate::
 pub async fn security_unlock(passphrase: String, state: State<'_, AppState>) -> Result<(), AppError> {
     let services = state.services()?;
     let mut identity = services.identity.lock().await;
-    identity.unlock_with_passphrase(&passphrase).map_err(|_| AppError::VaultLocked)?;
+    let attempts = identity.unlock_attempts();
+    let now = chrono::Utc::now().timestamp();
+    attempts.check(now).map_err(|retry_after_secs| AppError::TooManyAttempts { retry_after_secs })?;
+    if identity.unlock_with_passphrase(&passphrase).is_err() {
+        attempts.record_failure(now);
+        return Err(AppError::VaultLocked);
+    }
+    attempts.record_success();
     sync_guardian_key(&services, &identity).await;
     Ok(())
 }

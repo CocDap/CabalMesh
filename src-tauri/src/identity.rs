@@ -176,6 +176,7 @@ impl IdentityStore {
     /// never actually enabled).
     pub fn unlock_with_passphrase(&mut self, passphrase: &str) -> Result<Vec<IdentityView>, Box<dyn Error>> {
         let provider = cabal_vault::PassphraseKeyProvider::open(&self.vault_salt_path, passphrase)?;
+        let legacy = provider.needs_upgrade();
         let candidate = Vault::new(self.vault_path.clone(), Box::new(provider) as Box<dyn cabal_vault::KeyProvider>);
         let records: Vec<IdentityRecord> = candidate.load()?;
 
@@ -183,7 +184,21 @@ impl IdentityStore {
         self.identities = records;
         self.locked = false;
         self.ensure_near_keys()?;
+        if legacy {
+            // Enrolled under the weaker pre-envelope parameters: re-encrypt
+            // under the current ones now that the passphrase is in hand. Not
+            // fatal — the vault is open either way, and the next unlock
+            // tries again.
+            if let Err(error) = self.enable_passphrase(passphrase) {
+                tracing::warn!(target: "cabalmesh::vault", %error, "could not upgrade the passphrase parameters");
+            }
+        }
         self.get_identity_views()
+    }
+
+    /// Persisted wrong-attempt counter for this vault. See `unlock_attempts`.
+    pub(crate) fn unlock_attempts(&self) -> crate::unlock_attempts::UnlockAttempts {
+        crate::unlock_attempts::UnlockAttempts::new(self.vault_path.with_file_name("unlock_attempts.json"))
     }
 
     /// The key currently protecting the vault, for splitting into guardian
@@ -771,6 +786,32 @@ mod security_tests {
         assert_eq!(restarted.identities, lost.identities);
 
         assert!(fresh.adopt_restored(b"not a vault").is_err());
+    }
+
+    #[test]
+    fn a_legacy_passphrase_vault_is_upgraded_on_unlock() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+        let mut bridge = bridge_from_disk(&path);
+        bridge.enable_passphrase("hunter2222").unwrap();
+        let original = bridge.identities.clone();
+
+        // Rewrite as an old install would have left it: bare-hex salt, vault
+        // encrypted under Argon2 crate defaults.
+        std::fs::write(&bridge.vault_salt_path, hex::encode([3_u8; 16])).unwrap();
+        let legacy = cabal_vault::PassphraseKeyProvider::open(&bridge.vault_salt_path, "hunter2222").unwrap();
+        Vault::new(bridge.vault_path.clone(), Box::new(legacy) as Box<dyn cabal_vault::KeyProvider>)
+            .save(&original)
+            .unwrap();
+
+        let mut restarted = bridge_from_disk(&path);
+        restarted.unlock_with_passphrase("hunter2222").unwrap();
+        let salt = std::fs::read_to_string(&restarted.vault_salt_path).unwrap();
+        assert!(salt.contains("\"m\":65536"), "re-enrolled under current parameters: {salt}");
+
+        let mut again = bridge_from_disk(&path);
+        again.unlock_with_passphrase("hunter2222").unwrap();
+        assert_eq!(again.identities, original);
     }
 
     #[test]

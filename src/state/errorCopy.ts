@@ -40,6 +40,8 @@ export function errorCopy(failure: unknown): string {
       return "The vault is locked. No key is available.";
     case "too_many_subscriptions":
       return "Too many live streams. Close a screen and retry.";
+    case "too_many_attempts":
+      return `Too many wrong attempts. Try again in ${error.detail.retry_after_secs}s.`;
     case "model":
       return modelCopy(error.detail.problem);
     case "internal":

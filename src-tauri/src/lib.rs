@@ -41,6 +41,7 @@ mod lifecycle;
 mod telemetry;
 mod vault_key;
 mod security_state;
+mod unlock_attempts;
 pub mod guardian;
 pub mod guardian_actor;
 pub mod intent_chat;
